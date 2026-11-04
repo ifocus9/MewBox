@@ -4,6 +4,7 @@ import com.mewbox.tv.api.config.VodConfig
 import com.mewbox.tv.api.net.HostMapping
 import com.mewbox.tv.api.parser.ResultParser
 import com.mewbox.tv.bean.Site
+import com.mewbox.tv.bean.Vod
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -30,6 +31,13 @@ class ResultParserTest {
         assertTrue(r.list.all { it.isMsearch })
         assertEquals(1, r.page)
         assertTrue(r.pageCount > 1)
+
+        // 验证 msearch 包含匹配规则（对齐 FongMi 与 CatPawOpen 豆瓣源）
+        assertTrue(Vod(vodId = "msearch:36179101").isMsearch)
+        assertTrue(Vod(vodId = "msearch:").isMsearch)
+        assertTrue(Vod(vodId = "msearch").isMsearch)
+        assertTrue(Vod(vodId = "douban_msearch_123").isMsearch)
+        assertFalse(Vod(vodId = "normal_12345").isMsearch)
     }
 
     @Test
@@ -140,14 +148,43 @@ class ResultParserTest {
 
     @Test
     fun merge_keepsUserToggles() {
-        val incoming = listOf(Site(key = "a", name = "new", type = 4, api = "http://x", enabled = true, searchable = true))
-        val old = mapOf("a" to Site(key = "a", name = "old", type = 4, api = "http://y", enabled = false, searchable = false, isHome = true))
-        val m = VodConfig.merge(incoming, old).single()
-        assertEquals("new", m.name)
-        assertEquals("http://x", m.api)
-        assertFalse(m.enabled)
-        assertFalse(m.searchable)
-        assertTrue(m.isHome)
+        val incoming = listOf(
+            Site(key = "a", name = "new", type = 4, api = "http://x", enabled = true, searchable = 1, changeable = true, quickSearch = true),
+            Site(key = "b", name = "nosrch", type = 4, api = "http://z", enabled = true, searchable = 0, changeable = false, quickSearch = false)
+        )
+        val old = mapOf(
+            "a" to Site(key = "a", name = "old", type = 4, api = "http://y", enabled = false, searchable = 2, isHome = true, changeable = true, quickSearch = true),
+            "b" to Site(key = "b", name = "old_nosrch", type = 4, api = "http://z", enabled = true, searchable = 1, isHome = false, changeable = true, quickSearch = true)
+        )
+        val merged = VodConfig.merge(incoming, old)
+        val ma = merged.first { it.key == "a" }
+        assertEquals("new", ma.name)
+        assertEquals("http://x", ma.api)
+        assertFalse(ma.enabled)
+        assertEquals(2, ma.searchable)
+        assertFalse(ma.isSearchable)
+        assertTrue(ma.isSearchSupport)
+        assertTrue(ma.changeable)
+        assertTrue(ma.quickSearch)
+        // isHome 不由站点 merge 继承，由 Config.home 统一调度，因此 merge 结果中默认为 false
+        assertFalse(ma.isHome)
+
+        val mb = merged.first { it.key == "b" }
+        assertEquals(0, mb.searchable)
+        assertFalse(mb.isSearchable)
+        assertFalse(mb.isSearchSupport)
+        assertFalse(mb.changeable)
+        assertFalse(mb.quickSearch)
+    }
+
+    @Test
+    fun parseSites_basesetDefaultsToNonChangeableAndNonSearchable() {
+        val json = """{"sites":[{"key":"nodejs_baseset","name":"配置[设]","type":3,"api":"node:/spider/baseset/3"}]}"""
+        val sites = ResultParser.parseSites(json)
+        val baseset = sites.single()
+        assertFalse(baseset.changeable)
+        assertFalse(baseset.quickSearch)
+        assertEquals(0, baseset.searchable)
     }
 
     @Test
@@ -188,5 +225,20 @@ class ResultParserTest {
         assertEquals("超清1080P", r.playUrls[1].name)
         assertEquals("https://dl-uf-zb.pds.uc.cn/stream_1080p.mkv", r.playUrls[1].url)
         assertEquals("uc-cloud-drive", r.header["User-Agent"])
+    }
+
+    @Test
+    fun inferMimeType_detectsM3u8ProxyAndHlsStreams() {
+        val userUrl = "http://127.0.0.1:9988/m3u8-proxy?url=https%3A%2F%2Fvd.wmvbo.com%2Fea9c768a223550c9362bf59d47275a0c%2F20261029175803%2F5738039402bc7cbc3fb811d2%2Fdecry%2Fvd%2F20260814%2FOGI2ZmY3NGJl%2F122608%2F2758_1080%2Faac%2Fh264%2Fhls%2Fdecrypt%2Findex.m3u8&h=eyJVc2VyLUFnZW50IjoiTGF2Zi81Ny44My4xMDAiLCJSZWZlcmVyIjoiaHR0cDovL1dKaVp4TFhBMi5jb20vIiwiQWNjZXB0LUVuY29kaW5nIjoiZ3ppcCJ9"
+        assertEquals(androidx.media3.common.MimeTypes.APPLICATION_M3U8, com.mewbox.tv.player.Players.inferMimeType(userUrl))
+
+        val directM3u8 = "https://example.com/live/stream.m3u8?token=123"
+        assertEquals(androidx.media3.common.MimeTypes.APPLICATION_M3U8, com.mewbox.tv.player.Players.inferMimeType(directM3u8))
+
+        val dashUrl = "https://example.com/manifest.mpd"
+        assertEquals(androidx.media3.common.MimeTypes.APPLICATION_MPD, com.mewbox.tv.player.Players.inferMimeType(dashUrl))
+
+        val untypedWithFormat = "http://example.com/live/stream"
+        assertEquals(androidx.media3.common.MimeTypes.APPLICATION_M3U8, com.mewbox.tv.player.Players.inferMimeType(untypedWithFormat, format = "hls"))
     }
 }

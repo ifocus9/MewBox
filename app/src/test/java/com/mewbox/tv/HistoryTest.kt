@@ -15,6 +15,12 @@ class HistoryTest {
     }
 
     @Test
+    fun history_key_withConfigUrl_isScoped() {
+        val key = History.key("t4_site", "vod_123", "http://example.com/tv.json")
+        assertEquals("http://example.com/tv.json_t4_site_vod_123", key)
+    }
+
+    @Test
     fun history_formatProgress_withDuration() {
         val str = HistoryViewModel.formatProgress(position = 60_000L, duration = 120_000L)
         assertEquals("已看 50% (01:00 / 02:00)", str)

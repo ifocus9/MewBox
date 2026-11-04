@@ -18,6 +18,7 @@ interface Spider {
     suspend fun detailContent(ids: List<String>): Result
     suspend fun searchContent(keyword: String, quick: Boolean = false, pg: String = "1"): Result
     suspend fun playerContent(flag: String, id: String, vipFlags: List<String> = emptyList()): Result
+    suspend fun action(action: String): Result = Result()
     fun destroy() {}
 }
 
@@ -26,6 +27,9 @@ interface SpiderLoader {
     fun supports(site: Site): Boolean
     fun getSpider(site: Site): Spider
     fun clear() {}
+
+    /** 该引擎的站点是否共享同一个下游运行时（如 Node.js 单线程服务），搜索限流时需要单独分组 */
+    val sharesRuntime: Boolean get() = false
 }
 
 /** 本地守护进程生命周期接口（为内置 Node.js 9988 服务预留）。 */

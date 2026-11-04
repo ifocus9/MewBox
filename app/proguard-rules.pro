@@ -23,12 +23,15 @@
     @kotlinx.serialization.Serializable <fields>;
 }
 
-# Media3 ExoPlayer
--keep class androidx.media3.exoplayer.** { *; }
--keep class androidx.media3.datasource.** { *; }
--keep class androidx.media3.ui.** { *; }
+# Media3 ExoPlayer（无需全量 -keep，由 AAR 自带的 consumer rules 精确防混淆）
 -dontwarn androidx.media3.**
 
 # Hilt
 -keep class * extends androidx.hilt.lifecycle.ViewModelAssistedFactory
 -dontwarn dagger.hilt.**
+
+# Node.js engine & JNI bridge
+-keep class com.fongmi.nodejs.** { *; }
+-keepclasseswithmembernames class * {
+    native <methods>;
+}

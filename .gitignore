@@ -4,3 +4,9 @@ local.properties
 .idea/
 *.iml
 app/schemas/
+.workbuddy/
+.kotlin/
+
+# 签名密钥随仓库提交（.key/ 目录），如需排除请取消下面两行注释
+#*.jks
+#*.keystore

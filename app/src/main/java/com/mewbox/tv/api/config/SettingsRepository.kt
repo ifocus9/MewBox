@@ -1,6 +1,7 @@
 package com.mewbox.tv.api.config
 
 import android.content.Context
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -9,26 +10,68 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import javax.inject.Inject
 import javax.inject.Singleton
 
 private val Context.dataStore by preferencesDataStore(name = "settings")
 
-/** 全局偏好：本地地址映射、最近一次订阅地址。 */
+/** 全局偏好：本地地址映射、最近一次订阅地址、搜索历史等。 */
 @Singleton
 class SettingsRepository @Inject constructor(
-    @ApplicationContext private val context: Context,
+    @param:ApplicationContext private val context: Context,
     private val hostMapping: HostMapping,
 ) {
     private val hostKey = stringPreferencesKey("host_mapping")
     private val configUrlKey = stringPreferencesKey("config_url")
+    private val searchHistoryKey = stringPreferencesKey("search_history")
+
+    /** 选集「精简」开关：全局记忆，详情页抽屉与全屏选集面板共用（对齐 MewPlayer）。 */
+    private val compactEpisodeKey = booleanPreferencesKey("compact_episode_title")
+
+    private val json = Json { ignoreUnknownKeys = true }
+
+    @Volatile
+    var currentConfigUrl: String = ""
+        private set
+
+    @Volatile
+    var searchHistory: List<String> = emptyList()
+        private set
 
     val hostMappingFlow: Flow<String> = context.dataStore.data.map { it[hostKey].orEmpty() }
     val configUrlFlow: Flow<String> = context.dataStore.data.map { it[configUrlKey].orEmpty() }
+    val compactEpisodeTitleFlow: Flow<Boolean> = context.dataStore.data.map { it[compactEpisodeKey] ?: false }
+    val searchHistoryFlow: Flow<List<String>> = context.dataStore.data.map { prefs ->
+        parseSearchHistory(prefs[searchHistoryKey].orEmpty())
+    }
 
-    /** 启动时把持久化的映射装载进内存。 */
+    /** 首次渲染前同步读取一次，避免抽屉打开瞬间按钮状态闪一下。 */
+    @Volatile
+    var compactEpisodeTitle: Boolean = false
+        private set
+
+    private fun parseSearchHistory(raw: String): List<String> {
+        if (raw.isBlank()) return emptyList()
+        return runCatching {
+            json.decodeFromString<List<String>>(raw)
+        }.getOrDefault(emptyList())
+    }
+
+    /** 启动时把持久化的映射与搜索历史装载进内存。 */
     suspend fun load() {
-        hostMapping.target = context.dataStore.data.first()[hostKey].orEmpty()
+        val prefs = context.dataStore.data.first()
+        val saved = prefs[hostKey].orEmpty()
+        currentConfigUrl = prefs[configUrlKey].orEmpty()
+        compactEpisodeTitle = prefs[compactEpisodeKey] ?: false
+        searchHistory = parseSearchHistory(prefs[searchHistoryKey].orEmpty())
+        // 容错处理：若残留废弃的 10.0.2.2 模拟器旧映射，自动清除，优先使用 App 本地内置 Node.js 服务
+        if (saved == "10.0.2.2") {
+            setHostMapping("")
+        } else {
+            hostMapping.target = saved
+        }
     }
 
     suspend fun setHostMapping(value: String) {
@@ -38,6 +81,40 @@ class SettingsRepository @Inject constructor(
     }
 
     suspend fun setConfigUrl(url: String) {
-        context.dataStore.edit { it[configUrlKey] = url }
+        val v = url.trim()
+        currentConfigUrl = v
+        context.dataStore.edit { it[configUrlKey] = v }
+    }
+
+    suspend fun setCompactEpisodeTitle(value: Boolean) {
+        compactEpisodeTitle = value
+        context.dataStore.edit { it[compactEpisodeKey] = value }
+    }
+
+    suspend fun addSearchHistory(keyword: String) {
+        val kw = keyword.trim()
+        if (kw.isBlank()) return
+        context.dataStore.edit { prefs ->
+            val current = parseSearchHistory(prefs[searchHistoryKey].orEmpty())
+            val updated = (listOf(kw) + current.filter { it != kw }).take(20)
+            searchHistory = updated
+            prefs[searchHistoryKey] = json.encodeToString(updated)
+        }
+    }
+
+    suspend fun deleteSearchHistory(keyword: String) {
+        context.dataStore.edit { prefs ->
+            val current = parseSearchHistory(prefs[searchHistoryKey].orEmpty())
+            val updated = current.filter { it != keyword }
+            searchHistory = updated
+            prefs[searchHistoryKey] = json.encodeToString(updated)
+        }
+    }
+
+    suspend fun clearSearchHistory() {
+        searchHistory = emptyList()
+        context.dataStore.edit { prefs ->
+            prefs.remove(searchHistoryKey)
+        }
     }
 }

@@ -11,6 +11,7 @@ import com.mewbox.tv.db.AppDatabase
 import com.mewbox.tv.db.ConfigDao
 import com.mewbox.tv.db.HistoryDao
 import com.mewbox.tv.db.SiteDao
+import com.mewbox.tv.engine.nodejs.NodeSpiderLoader
 import com.mewbox.tv.engine.t4.T4SpiderLoader
 import dagger.Binds
 import dagger.Module
@@ -28,14 +29,26 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 object NetworkModule {
-    /** 源 API 专用：宽松超时 + 忽略自签名证书，仅此 Client 使用 SSLCompat。 */
+    /** 源 API 专用：宽松超时 + 忽略自签名证书，仅此 Client 使用 SSLCompat。
+     * 配置高并发 Dispatcher（提高单 Host 并发至 64）与大连接池，解决多源同时请求同一本地/聚合服务器时的排队瓶颈。
+     */
     @Provides @Singleton @Named("api")
-    fun apiClient(hostMapping: HostMapping): OkHttpClient =
-        SSLCompat.apply(OkHttpClient.Builder())
+    fun apiClient(hostMapping: HostMapping): OkHttpClient {
+        val dispatcher = okhttp3.Dispatcher().apply {
+            maxRequests = 128
+            maxRequestsPerHost = 64
+        }
+        val pool = okhttp3.ConnectionPool(64, 5, TimeUnit.MINUTES)
+        return SSLCompat.apply(OkHttpClient.Builder())
+            .dispatcher(dispatcher)
+            .connectionPool(pool)
             .addInterceptor(HostInterceptor(hostMapping))
-            .connectTimeout(10, TimeUnit.SECONDS)
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .build()
+    }
 
     /** 播放器/图片专用：做 127.0.0.1 映射、自动跟随重定向并具备 SSL 容错（兼容网盘多级 302 节点与 CDN）。
      * 配置专属连接池与连接重试，复用与网盘 CDN 节点的 TCP/TLS 链路，大幅减少 Range 串行分片请求的重连开销。
@@ -44,7 +57,7 @@ object NetworkModule {
     fun playerClient(hostMapping: HostMapping): OkHttpClient =
         SSLCompat.apply(OkHttpClient.Builder())
             .addInterceptor(HostInterceptor(hostMapping))
-            .connectionPool(okhttp3.ConnectionPool(16, 5, TimeUnit.MINUTES))
+            .connectionPool(okhttp3.ConnectionPool(32, 5, TimeUnit.MINUTES))
             .retryOnConnectionFailure(true)
             .followRedirects(true)
             .followSslRedirects(true)
@@ -65,7 +78,15 @@ object NetworkModule {
 object DatabaseModule {
     @Provides @Singleton
     fun database(@ApplicationContext context: Context): AppDatabase =
-        Room.databaseBuilder(context, AppDatabase::class.java, "mewbox.db").build()
+        Room.databaseBuilder(context, AppDatabase::class.java, "mewbox.db")
+            .addMigrations(
+                AppDatabase.MIGRATION_1_2,
+                AppDatabase.MIGRATION_2_3,
+                AppDatabase.MIGRATION_3_4,
+                AppDatabase.MIGRATION_4_5,
+            )
+            .fallbackToDestructiveMigration()
+            .build()
 
     @Provides fun siteDao(db: AppDatabase): SiteDao = db.siteDao()
     @Provides fun configDao(db: AppDatabase): ConfigDao = db.configDao()
@@ -78,4 +99,7 @@ object DatabaseModule {
 abstract class EngineModule {
     @Binds @IntoSet
     abstract fun bindT4(loader: T4SpiderLoader): SpiderLoader
+
+    @Binds @IntoSet
+    abstract fun bindNode(loader: NodeSpiderLoader): SpiderLoader
 }

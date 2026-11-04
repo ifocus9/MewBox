@@ -8,25 +8,38 @@ import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.TransferListener
 import timber.log.Timber
+import java.io.EOFException
 import java.io.IOException
 import java.net.ProtocolException
+import java.net.SocketException
+import java.net.SocketTimeoutException
 
 /**
  * 移植自 MewPlayer / FongMi：
- * 在网盘或远程流媒体 HTTP 响应被异常截断或抛出 "unexpected end of stream" 时，
+ * 在网盘或远程流媒体 HTTP 响应被异常截断、超时或抛出 "unexpected end of stream" / "Connection reset" 时，
  * 自动在未读断点处重新发起 Range 连接接续播放，避免播放器抛出致命错误中断播放。
  */
 @UnstableApi
 class HttpEofRecoveryDataSource(private val upstream: DataSource) : DataSource {
 
     companion object {
-        private const val MAX_CONSECUTIVE_RECONNECTS = 3
+        private const val MAX_CONSECUTIVE_RECONNECTS = 5
+        private const val MAX_OPEN_RETRIES = 3
         private val UNSET_LENGTH: Long = C.LENGTH_UNSET.toLong()
 
         fun isRecoverableEof(error: Throwable): Boolean {
             var current: Throwable? = error
             while (current != null) {
+                if (current is EOFException) {
+                    return true
+                }
                 if (current is ProtocolException && messageContainsUnexpectedEnd(current.message)) {
+                    return true
+                }
+                if (current is SocketException) {
+                    return true
+                }
+                if (current is SocketTimeoutException) {
                     return true
                 }
                 current = current.cause
@@ -35,7 +48,10 @@ class HttpEofRecoveryDataSource(private val upstream: DataSource) : DataSource {
         }
 
         private fun messageContainsUnexpectedEnd(message: String?): Boolean {
-            return message != null && message.lowercase().contains("unexpected end of stream")
+            return message != null && (
+                message.lowercase().contains("unexpected end of stream") ||
+                message.lowercase().contains("unexpected eof")
+            )
         }
 
         fun remainingLength(requestedLength: Long, bytesRead: Long): Long {
@@ -57,7 +73,28 @@ class HttpEofRecoveryDataSource(private val upstream: DataSource) : DataSource {
         this.dataSpec = dataSpec
         this.bytesRead = 0L
         this.consecutiveReconnects = 0
-        return upstream.open(dataSpec)
+
+        var attempt = 0
+        while (true) {
+            try {
+                return upstream.open(dataSpec)
+            } catch (error: IOException) {
+                attempt++
+                if (!isRecoverableEof(error) || attempt >= MAX_OPEN_RETRIES) {
+                    throw error
+                }
+                Timber.w(error, "HttpEofRecoveryDataSource: 打开数据流失败，重试连接 (%d/%d)...", attempt, MAX_OPEN_RETRIES)
+                try {
+                    upstream.close()
+                } catch (_: IOException) {}
+                try {
+                    Thread.sleep(100L * attempt)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw error
+                }
+            }
+        }
     }
 
     @Throws(IOException::class)
@@ -75,6 +112,11 @@ class HttpEofRecoveryDataSource(private val upstream: DataSource) : DataSource {
                     throw error
                 }
                 consecutiveReconnects++
+                try {
+                    Thread.sleep(80L * consecutiveReconnects)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                }
                 reconnectAtCurrentPosition()
             }
         }

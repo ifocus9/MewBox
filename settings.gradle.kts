@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "MewBox"
 include(":app")
+include(":libs:backdrop")

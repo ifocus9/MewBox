@@ -1,27 +1,28 @@
 package com.mewbox.tv.ui.setting
 
+import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.outlined.Home
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -31,135 +32,262 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.mewbox.tv.BuildConfig
+import com.mewbox.tv.ui.components.LoadingState
+import com.mewbox.tv.ui.components.SubscriptionHistoryDialog
 
-import androidx.compose.foundation.layout.statusBarsPadding
-
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun SettingsScreen(modifier: Modifier = Modifier, viewModel: SettingsViewModel = hiltViewModel()) {
+fun SettingsScreen(
+    modifier: Modifier = Modifier,
+    /** 切换/新增订阅后立刻跳回首页：Node.js 加载 loading 由全局浮层展示在首页上 */
+    onSwitchToHome: () -> Unit = {},
+    viewModel: SettingsViewModel = hiltViewModel(),
+) {
+    val context = LocalContext.current
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    var input by rememberSaveable { mutableStateOf("") }
-    var host by rememberSaveable { mutableStateOf("") }
+    var showConfigDialog by rememberSaveable { mutableStateOf(false) }
+    var configDialogIsEdit by rememberSaveable { mutableStateOf(false) }
+    var configDialogInitialUrl by rememberSaveable { mutableStateOf("") }
+    var configDialogInitialName by rememberSaveable { mutableStateOf("") }
+    var showHistoryDialog by rememberSaveable { mutableStateOf(false) }
+    var showAboutDialog by rememberSaveable { mutableStateOf(false) }
+    var showTmdbDialog by rememberSaveable { mutableStateOf(false) }
 
-    // 首次拿到持久化值时回填输入框
-    LaunchedEffect(state.savedConfigUrl) { if (input.isEmpty()) input = state.savedConfigUrl }
-    LaunchedEffect(state.savedHost) { if (host.isEmpty()) host = state.savedHost }
+    LaunchedEffect(Unit) {
+        viewModel.loadCacheSize()
+    }
 
-    LazyColumn(
-        modifier = modifier.fillMaxWidth().statusBarsPadding(),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+    // 成功 / 失败的统一提示（订阅弹窗点确定后立即关闭，结果只走 Toast）
+    LaunchedEffect(state.message) {
+        state.message?.let { msg ->
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+            viewModel.consumeMessage()
+        }
+    }
+
+    val currentConfig = state.configs.find { it.url == state.savedConfigUrl }
+    // 未设置订阅名称时，直接以订阅链接作为名称展示
+    val subscriptionDisplay = when {
+        currentConfig != null && currentConfig.name.isNotBlank() -> currentConfig.name
+        currentConfig != null -> formatMiddleEllipsis(currentConfig.url)
+        state.savedConfigUrl.isNotBlank() -> formatMiddleEllipsis(state.savedConfigUrl)
+        else -> "未配置"
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background),
     ) {
-        item { Text("设置", style = MaterialTheme.typography.headlineMedium) }
+        // 顶部标题栏（参考 MewPlayer fragment_setting MaterialToolbar）
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .height(56.dp)
+                .padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "设置",
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextPrimary,
+            )
+        }
 
-        item {
-            SectionCard("订阅配置") {
-                OutlinedTextField(
-                    value = input,
-                    onValueChange = { input = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("config.json 地址或 JSON 文本") },
-                    maxLines = 4,
-                )
-                Spacer(Modifier.size(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Button(onClick = { viewModel.import(input) }, enabled = !state.importing) { Text("导入") }
-                    if (state.importing) {
-                        Spacer(Modifier.size(12.dp))
-                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+        // 内容区域（参考 MewPlayer fragment_setting）
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 150.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            // 卡片 1：订阅配置（点击新增弹窗，长按编辑弹窗并可设置名称；右侧历史图标为灰色）
+            SettingCard {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // 主点击区域：点击新增，长按编辑
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .combinedClickable(
+                                onClick = {
+                                    configDialogIsEdit = false
+                                    configDialogInitialUrl = ""
+                                    configDialogInitialName = ""
+                                    showConfigDialog = true
+                                },
+                                onLongClick = {
+                                    configDialogIsEdit = true
+                                    configDialogInitialUrl = state.savedConfigUrl
+                                    configDialogInitialName = currentConfig?.name.orEmpty()
+                                    showConfigDialog = true
+                                },
+                            )
+                            .padding(start = 16.dp, end = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "订阅",
+                            fontSize = 16.sp,
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Normal,
+                        )
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            text = subscriptionDisplay,
+                            fontSize = 14.sp,
+                            color = TextSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.End,
+                            modifier = Modifier.widthIn(max = 180.dp),
+                        )
+                    }
+
+                    // 历史订阅列表按钮
+                    IconButton(
+                        onClick = {
+                            if (state.configs.any { it.url != state.savedConfigUrl }) {
+                                showHistoryDialog = true
+                            } else {
+                                Toast.makeText(context, "没有可切换的订阅", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        modifier = Modifier
+                            .padding(end = 8.dp)
+                            .size(40.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.History,
+                            contentDescription = "订阅列表",
+                            modifier = Modifier.size(22.dp),
+                            tint = TextSecondary,
+                        )
                     }
                 }
-                state.message?.let {
-                    Spacer(Modifier.size(8.dp))
-                    Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
-                }
             }
-        }
 
-        item {
-            SectionCard("本地地址映射") {
-                Text(
-                    "配置中的 127.0.0.1 / localhost 将被替换为此地址（含播放直链）。" +
-                        "模拟器填 10.0.2.2；真机可填局域网 IP，或使用 adb reverse tcp:9988 tcp:9988 后留空。",
-                    style = MaterialTheme.typography.bodySmall,
+            // 卡片 2：TMDB 设置
+            SettingCard {
+                SettingRow(
+                    title = "TMDB 设置",
+                    value = if (state.tmdbConfig.enable) "开启" else "关闭",
+                    onClick = { showTmdbDialog = true },
                 )
-                Spacer(Modifier.size(8.dp))
-                OutlinedTextField(
-                    value = host,
-                    onValueChange = { host = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("目标主机（可带端口，留空不映射）") },
-                    singleLine = true,
-                )
-                Spacer(Modifier.size(8.dp))
-                OutlinedButton(onClick = { viewModel.saveHost(host) }) { Text("保存映射") }
             }
-        }
 
-        item { Text("站点（${state.sites.size}）", style = MaterialTheme.typography.titleMedium) }
+            // 卡片 3：缓存清理
+            SettingCard {
+                SettingRow(
+                    title = "缓存",
+                    value = state.cacheSize,
+                    onClick = { viewModel.clearCache() },
+                )
+            }
 
-        items(state.sites, key = { it.site.key }) { item ->
-            SiteRow(item, viewModel)
+            // 卡片 4：关于
+            SettingCard {
+                SettingRow(
+                    title = "关于",
+                    value = "MewBox ${BuildConfig.VERSION_NAME}",
+                    onClick = { showAboutDialog = true },
+                )
+            }
         }
     }
-}
 
-@Composable
-private fun SectionCard(title: String, content: @Composable () -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-    ) {
-        Column(Modifier.padding(16.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.size(8.dp))
-            content()
-        }
+    // 历史订阅弹窗
+    if (showHistoryDialog) {
+        SubscriptionHistoryDialog(
+            configs = state.configs.filter { it.url != state.savedConfigUrl },
+            onSelect = { url ->
+                viewModel.import(url)
+                showHistoryDialog = false
+            },
+            onEdit = { item ->
+                showHistoryDialog = false
+                configDialogIsEdit = true
+                configDialogInitialUrl = item.url
+                configDialogInitialName = item.name
+                showConfigDialog = true
+            },
+            onDelete = { url ->
+                viewModel.deleteConfig(url)
+            },
+            onDismiss = { showHistoryDialog = false },
+        )
     }
-}
 
-@Composable
-private fun SiteRow(item: SiteItem, vm: SettingsViewModel) {
-    val site = item.site
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .alpha(if (item.supported) 1f else 0.5f),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-    ) {
-        Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = { vm.setHome(site) }, enabled = item.supported) {
-                Icon(
-                    if (site.isHome) Icons.Filled.Home else Icons.Outlined.Home,
-                    contentDescription = "设为首页源",
-                    tint = if (site.isHome) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+    // 添加 / 编辑订阅弹窗
+    if (showConfigDialog) {
+        ConfigDialog(
+            isEdit = configDialogIsEdit,
+            initialUrl = configDialogInitialUrl,
+            initialName = configDialogInitialName,
+            onDismiss = {
+                viewModel.consumeMessage()
+                showConfigDialog = false
+            },
+            onConfirm = { url, name ->
+                showConfigDialog = false
+                viewModel.saveConfig(
+                    url = url,
+                    name = name,
+                    isEdit = configDialogIsEdit,
+                    oldUrl = configDialogInitialUrl,
                 )
-            }
-            Column(Modifier.weight(1f)) {
-                Text(site.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(
-                    if (item.supported) site.key else "${site.key} · 暂不支持 (type=${site.type})",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            LabeledSwitch("启用", site.enabled, item.supported) { vm.toggleEnabled(site) }
-            LabeledSwitch("搜索", site.searchable, item.supported) { vm.toggleSearchable(site) }
-            LabeledSwitch("换源", site.changeable, item.supported) { vm.toggleChangeable(site) }
-        }
+            },
+        )
     }
-}
 
-@Composable
-private fun LabeledSwitch(label: String, checked: Boolean, enabled: Boolean, onToggle: () -> Unit) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(start = 6.dp)) {
-        Switch(checked = checked, onCheckedChange = { onToggle() }, enabled = enabled)
-        Text(label, style = MaterialTheme.typography.labelSmall)
+    // TMDB 设置弹窗
+    if (showTmdbDialog) {
+        TmdbDialog(
+            initialConfig = state.tmdbConfig,
+            onTestApi = { key, base -> viewModel.testTmdbApi(key, base) },
+            onTestImage = { base -> viewModel.testTmdbImage(base) },
+            onSave = { config ->
+                viewModel.saveTmdbConfig(config)
+                showTmdbDialog = false
+            },
+            onDismiss = { showTmdbDialog = false },
+        )
+    }
+
+    // 关于弹窗
+    if (showAboutDialog) {
+        AboutDialog(
+            onDismiss = { showAboutDialog = false },
+        )
+    }
+
+    // 订阅导入 loading
+    if (state.showImportOverlay) {
+        LoadingState(text = "正在导入订阅...")
+    }
+
+    // 导入成功自动跳回首页
+    LaunchedEffect(state.pendingHomeNav) {
+        if (state.pendingHomeNav) {
+            onSwitchToHome()
+            viewModel.consumePendingHomeNav()
+        }
     }
 }

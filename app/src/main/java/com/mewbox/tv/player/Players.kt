@@ -3,10 +3,13 @@ package com.mewbox.tv.player
 import android.content.Context
 import android.net.Uri
 import androidx.annotation.OptIn
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
@@ -47,7 +50,17 @@ data class PlayerState(
     val bufferedPosition: Long = 0L,
     val errorMessage: String? = null,
     val playUrl: String = "",
+    val headers: Map<String, String> = emptyMap(),
     val title: String = "",
+    val speed: Float = 1.0f,
+    val resizeMode: Int = 0, // AspectRatioFrameLayout.RESIZE_MODE_FIT
+    val videoWidth: Int = 0,
+    val videoHeight: Int = 0,
+    val networkSpeed: String = "",
+    val subtitleTracks: List<PlayerTrack> = emptyList(),
+    val audioTracks: List<PlayerTrack> = emptyList(),
+    val videoTracks: List<PlayerTrack> = emptyList(),
+    val isSubtitleDisabled: Boolean = false,
 )
 
 @Singleton
@@ -57,6 +70,8 @@ class Players @Inject constructor(
 ) {
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var progressJob: Job? = null
+    private var trafficJob: Job? = null
+    private val trafficSpeedMeter = TrafficSpeedMeter()
 
     @OptIn(UnstableApi::class)
     val exoPlayer: ExoPlayer = run {
@@ -64,33 +79,44 @@ class Players @Inject constructor(
         // 1. 使用 ExoBufferBudget 根据设备可用 RAM 与堆上限自适应计算缓冲大小，防止 1G/2G 电视盒子 OOM，并在高配设备上提供充足缓冲
         val targetBufferBytes = com.mewbox.tv.player.exo.ExoBufferBudget.getEffectiveTargetBytes(context)
 
-        // 2. bufferForPlaybackMs 降为 1000ms（极速起播，不再等待默认的 2500ms 冗余缓冲）
-        // 3. bufferForPlaybackAfterRebufferMs 设为 2000ms
-        // 4. setPrioritizeTimeOverSizeThresholds(true): 极其关键，以时间时长为准，避免大码率 4K 视频因等待超大内存 buffer 填满而迟迟不起播
+        // 2. bufferForPlaybackMs 设为 1500ms（既保证极速起播，又避免过小缓冲瞬间被耗尽引发二次卡顿）
+        // 3. bufferForPlaybackAfterRebufferMs 设为 3000ms（缓冲恢复后具备充足防抖余量）
+        // 4. setPrioritizeTimeOverSizeThresholds(true): 极其关键，以时间时长为准，避免因等待超大内存 buffer 填满而迟迟不起播
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
             .setBufferDurationsMs(
                 /* minBufferMs = */ 30_000,
                 /* maxBufferMs = */ 60_000,
-                /* bufferForPlaybackMs = */ 1_000,
-                /* bufferForPlaybackAfterRebufferMs = */ 2_000,
+                /* bufferForPlaybackMs = */ 1_500,
+                /* bufferForPlaybackAfterRebufferMs = */ 3_000,
             )
             .setTargetBufferBytes(targetBufferBytes)
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 
-        // 5. 启用解码器降级容错 + 扩展解码器开启
+        // 5. 启用解码器降级容错 + 扩展解码器开启 + 解码器预热（消除首次起播解码器冷启动等待）
         val renderersFactory = androidx.media3.exoplayer.DefaultRenderersFactory(context).apply {
             setEnableDecoderFallback(true)
             setExtensionRendererMode(androidx.media3.exoplayer.DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+            experimentalSetEnableMediaCodecVideoRendererPrewarming(true)
         }
 
-        ExoPlayer.Builder(context, renderersFactory)
+        val player = ExoPlayer.Builder(context, renderersFactory)
             .setLoadControl(loadControl)
             .build()
+        // 关键优化（对齐主流网络播放器与 FongMi）：启用 CLOSEST_SYNC 关键帧吸附寻道。
+        // 彻底解决高码率 4K/1080p 网盘长 GOP 视频在进度条快进或历史进度起播时，
+        // 因 EXACT 模式强行逐帧解码数百个历史帧导致的解码管线堵塞、0KB/s 假死与黑屏卡住
+        player.setSeekParameters(androidx.media3.exoplayer.SeekParameters.CLOSEST_SYNC)
+        player
     }
 
     private val _state = MutableStateFlow(PlayerState())
     val state: StateFlow<PlayerState> = _state.asStateFlow()
+
+    private fun resolveDuration(previousDuration: Long): Long {
+        val d = exoPlayer.duration
+        return if (d > 0L && d != C.TIME_UNSET) d else previousDuration.coerceAtLeast(0L)
+    }
 
     init {
         exoPlayer.addListener(object : Player.Listener {
@@ -105,12 +131,13 @@ class Players @Inject constructor(
                 _state.update {
                     it.copy(
                         playbackState = mapped,
-                        duration = exoPlayer.duration.coerceAtLeast(0L),
+                        duration = resolveDuration(it.duration),
                         currentPosition = exoPlayer.currentPosition.coerceAtLeast(0L),
                         bufferedPosition = exoPlayer.bufferedPosition.coerceAtLeast(0L),
                     )
                 }
                 checkProgressPolling()
+                checkBufferingPolling(mapped == PlaybackState.BUFFERING)
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -118,10 +145,65 @@ class Players @Inject constructor(
                     it.copy(
                         isPlaying = isPlaying,
                         currentPosition = exoPlayer.currentPosition.coerceAtLeast(0L),
-                        duration = exoPlayer.duration.coerceAtLeast(0L),
+                        duration = resolveDuration(it.duration),
                     )
                 }
                 checkProgressPolling()
+            }
+
+            override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+                _state.update {
+                    it.copy(
+                        duration = resolveDuration(it.duration),
+                        currentPosition = exoPlayer.currentPosition.coerceAtLeast(0L),
+                        bufferedPosition = exoPlayer.bufferedPosition.coerceAtLeast(0L),
+                    )
+                }
+            }
+
+            override fun onPositionDiscontinuity(
+                oldPosition: Player.PositionInfo,
+                newPosition: Player.PositionInfo,
+                reason: Int,
+            ) {
+                _state.update {
+                    it.copy(
+                        duration = resolveDuration(it.duration),
+                        currentPosition = newPosition.positionMs.coerceAtLeast(0L),
+                        bufferedPosition = exoPlayer.bufferedPosition.coerceAtLeast(0L),
+                    )
+                }
+            }
+
+            override fun onEvents(player: Player, events: Player.Events) {
+                if (events.containsAny(
+                        Player.EVENT_TIMELINE_CHANGED,
+                        Player.EVENT_PLAYBACK_STATE_CHANGED,
+                        Player.EVENT_POSITION_DISCONTINUITY,
+                        Player.EVENT_MEDIA_ITEM_TRANSITION,
+                    )
+                ) {
+                    _state.update {
+                        it.copy(
+                            duration = resolveDuration(it.duration),
+                            currentPosition = exoPlayer.currentPosition.coerceAtLeast(0L),
+                            bufferedPosition = exoPlayer.bufferedPosition.coerceAtLeast(0L),
+                        )
+                    }
+                }
+            }
+
+            override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+                _state.update {
+                    it.copy(
+                        videoWidth = videoSize.width,
+                        videoHeight = videoSize.height,
+                    )
+                }
+            }
+
+            override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
+                updateTracks(tracks)
             }
 
             override fun onPlayerError(error: PlaybackException) {
@@ -130,9 +212,11 @@ class Players @Inject constructor(
                     it.copy(
                         playbackState = PlaybackState.ERROR,
                         errorMessage = error.localizedMessage ?: "播放错误 (${error.errorCodeName})",
+                        networkSpeed = "",
                     )
                 }
                 stopProgressPolling()
+                stopBufferingPolling()
             }
         })
     }
@@ -143,6 +227,7 @@ class Players @Inject constructor(
         headers: Map<String, String> = emptyMap(),
         title: String = "",
         startPosition: Long = 0L,
+        format: String = "",
     ) {
         if (url.isBlank()) {
             _state.update { it.copy(playbackState = PlaybackState.ERROR, errorMessage = "播放地址为空") }
@@ -159,45 +244,88 @@ class Players @Inject constructor(
                 if (k.isNotBlank() && v.isNotBlank()) {
                     if (k.equals("User-Agent", ignoreCase = true)) {
                         userAgent = v.trim()
-                    } else {
+                    } else if (!k.equals("Range", ignoreCase = true)) {
                         sanitized[k.trim()] = v.trim()
                     }
                 }
             }
-            if (!userAgent.isNullOrEmpty()) {
-                httpFactory.setUserAgent(userAgent)
+            val effectiveUa = if (!userAgent.isNullOrEmpty()) {
+                userAgent!!
+            } else {
+                DEFAULT_USER_AGENT
             }
+            // 确保 OkHttp 请求必定携带标准合法 User-Agent，避免网盘防盗链 WAF 识别到 okhttp 客户端阻断/限速
+            httpFactory.setUserAgent(effectiveUa)
             if (sanitized.isNotEmpty()) {
                 httpFactory.setDefaultRequestProperties(sanitized)
             }
 
-            // 2. 构造支持大文件 MKV / TS 网络流嗅探的 ExtractorsFactory（对齐 MewPlayer / FongMi）
+            // 2. 构造支持大文件 MKV / TS 网络流嗅探与关键帧定位的 ExtractorsFactory
+            // - setTsExtractorTimestampSearchBytes: TS 流时间戳嗅探范围扩大 10 倍
+            // - FLAG_ENABLE_HDMV_DTS_AUDIO_STREAMS: 开启 TS DTS 高清音频流支持
+            // - 移除 setConstantBitrateSeekingEnabled(true): 严禁对变码率 (VBR) 网盘视频开启常码率寻道，
+            //   避免按时间比例计算错误字节偏移造成解复用器陷入非同步数据包引发播放中断挂起
             val extractorsFactory = androidx.media3.extractor.DefaultExtractorsFactory()
                 .setTsExtractorTimestampSearchBytes(androidx.media3.extractor.ts.TsExtractor.DEFAULT_TIMESTAMP_SEARCH_BYTES * 10)
                 .setTsExtractorFlags(androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory.FLAG_ENABLE_HDMV_DTS_AUDIO_STREAMS)
-                .setMatroskaExtractorFlags(androidx.media3.extractor.mkv.MatroskaExtractor.FLAG_DISABLE_SEEK_FOR_CUES)
 
             val defaultDataSourceFactory = DefaultDataSource.Factory(context, httpFactory)
             // 移植自 MewPlayer: 注入 HttpEofRecoveryDataSource 自动拦截并重连网盘 unexpected EOF / 302 临时断流
             val upstreamFactory = com.mewbox.tv.player.exo.HttpEofRecoveryDataSource.Factory(defaultDataSourceFactory)
             val mediaSourceFactory = DefaultMediaSourceFactory(upstreamFactory, extractorsFactory)
 
-            val mediaItem = MediaItem.Builder()
+            val mediaItemBuilder = MediaItem.Builder()
                 .setUri(Uri.parse(url))
                 .setMediaMetadata(MediaMetadata.Builder().setTitle(title).build())
-                .build()
 
-            val mediaSource = mediaSourceFactory.createMediaSource(mediaItem)
+            // 智能推断或对齐 MimeType（对齐 FongMi / MewPlayer）
+            // 解决本地代理（如 /m3u8-proxy?url=...）或未以 .m3u8 结尾的流媒体链接被误判为 Progressive 从而报 Source error 的问题
+            val inferredMimeType = inferMimeType(url, format)
+            if (inferredMimeType != null) {
+                mediaItemBuilder.setMimeType(inferredMimeType)
+            }
+
+            val mediaItem = mediaItemBuilder.build()
+            val mediaSource = if (inferredMimeType == MimeTypes.APPLICATION_M3U8) {
+                // 深度优化 HLS 起播：
+                // 1. setAllowChunklessPreparation(true)：允许无需等待首个分片下载即可准备完成，大幅缩短起播耗时
+                // 2. FLAG_ALLOW_NON_IDR_KEYFRAMES：允许直接在非 IDR 关键帧处起播，无需等待下一个完整 IDR 帧
+                // 3. exposeCea608WhenMissingDeclarations = false：避免对字幕特征的无谓嗅探开销
+                val hlsExtractorFactory = androidx.media3.exoplayer.hls.DefaultHlsExtractorFactory(
+                    androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES,
+                    /* exposeCea608WhenMissingDeclarations = */ false,
+                )
+                androidx.media3.exoplayer.hls.HlsMediaSource.Factory(upstreamFactory)
+                    .setExtractorFactory(hlsExtractorFactory)
+                    .setAllowChunklessPreparation(true)
+                    .createMediaSource(mediaItem)
+            } else {
+                mediaSourceFactory.createMediaSource(mediaItem)
+            }
+
+            val effectiveHeaders = LinkedHashMap<String, String>()
+            effectiveHeaders["User-Agent"] = effectiveUa
+            sanitized.forEach { (k, v) ->
+                effectiveHeaders[k] = v
+            }
 
             _state.update {
                 it.copy(
                     playbackState = PlaybackState.BUFFERING,
+                    isPlaying = false,
                     errorMessage = null,
                     playUrl = url,
+                    headers = effectiveHeaders,
                     title = title,
                     currentPosition = startPosition,
+                    duration = 0L,
+                    bufferedPosition = startPosition,
+                    videoWidth = 0,
+                    videoHeight = 0,
+                    networkSpeed = "0KB/s",
                 )
             }
+            checkBufferingPolling(true)
 
             exoPlayer.setMediaSource(mediaSource, startPosition)
             exoPlayer.prepare()
@@ -218,6 +346,9 @@ class Players @Inject constructor(
     }
 
     fun resume() {
+        if (exoPlayer.playbackState == Player.STATE_ENDED) {
+            exoPlayer.seekTo(0L)
+        }
         exoPlayer.play()
     }
 
@@ -226,26 +357,252 @@ class Players @Inject constructor(
     }
 
     fun seekTo(positionMs: Long) {
-        exoPlayer.seekTo(positionMs.coerceAtLeast(0L))
-        _state.update { it.copy(currentPosition = positionMs) }
+        val curDuration = resolveDuration(_state.value.duration)
+        val target = if (curDuration > 0L) {
+            positionMs.coerceIn(0L, curDuration)
+        } else {
+            positionMs.coerceAtLeast(0L)
+        }
+        Timber.d("seekTo: requested=%d, target=%d, duration=%d", positionMs, target, curDuration)
+        _state.update {
+            it.copy(
+                playbackState = PlaybackState.BUFFERING,
+                currentPosition = target,
+                networkSpeed = "0KB/s",
+            )
+        }
+        checkBufferingPolling(true)
+        exoPlayer.seekTo(target)
+        exoPlayer.play()
+    }
+
+    fun seekBy(offsetMs: Long) {
+        val current = exoPlayer.currentPosition.coerceAtLeast(0L)
+        seekTo(current + offsetMs)
+    }
+
+    fun setPlaybackSpeed(speed: Float) {
+        exoPlayer.setPlaybackSpeed(speed)
+        _state.update { it.copy(speed = speed) }
+    }
+
+    fun setResizeMode(mode: Int) {
+        _state.update { it.copy(resizeMode = mode) }
     }
 
     fun stop() {
         stopProgressPolling()
+        stopBufferingPolling()
         exoPlayer.stop()
+        exoPlayer.clearMediaItems()
         _state.update {
             it.copy(
                 playbackState = PlaybackState.IDLE,
                 isPlaying = false,
                 currentPosition = 0L,
                 duration = 0L,
+                videoWidth = 0,
+                videoHeight = 0,
+                networkSpeed = "",
+                subtitleTracks = emptyList(),
+                audioTracks = emptyList(),
+                videoTracks = emptyList(),
             )
         }
     }
 
     fun release() {
         stopProgressPolling()
+        stopBufferingPolling()
         exoPlayer.release()
+    }
+
+    private val trackNameProvider by lazy { androidx.media3.ui.DefaultTrackNameProvider(context.resources) }
+
+    /**
+     * 解析 ExoPlayer 当前所有的轨道组并映射为响应式 PlayerTrack 实体
+     */
+    private fun updateTracks(tracks: androidx.media3.common.Tracks) {
+        val disabledTypes = exoPlayer.trackSelectionParameters.disabledTrackTypes
+        val isSubDisabled = disabledTypes.contains(C.TRACK_TYPE_TEXT)
+
+        val subtitles = mutableListOf<PlayerTrack>()
+        val audios = mutableListOf<PlayerTrack>()
+        val videos = mutableListOf<PlayerTrack>()
+
+        var textGroupIdx = 0
+        var audioGroupIdx = 0
+        var videoGroupIdx = 0
+
+        for (group in tracks.groups) {
+            when (group.type) {
+                C.TRACK_TYPE_TEXT -> {
+                    for (i in 0 until group.length) {
+                        subtitles.add(createPlayerTrack(group, i, textGroupIdx))
+                    }
+                    textGroupIdx++
+                }
+                C.TRACK_TYPE_AUDIO -> {
+                    for (i in 0 until group.length) {
+                        audios.add(createPlayerTrack(group, i, audioGroupIdx))
+                    }
+                    audioGroupIdx++
+                }
+                C.TRACK_TYPE_VIDEO -> {
+                    for (i in 0 until group.length) {
+                        videos.add(createPlayerTrack(group, i, videoGroupIdx))
+                    }
+                    videoGroupIdx++
+                }
+            }
+        }
+
+        _state.update {
+            it.copy(
+                subtitleTracks = subtitles,
+                audioTracks = audios,
+                videoTracks = videos,
+                isSubtitleDisabled = isSubDisabled,
+            )
+        }
+    }
+
+    private fun createPlayerTrack(
+        group: androidx.media3.common.Tracks.Group,
+        trackIndex: Int,
+        groupIndex: Int,
+    ): PlayerTrack {
+        val format = group.getTrackFormat(trackIndex)
+        val isSelected = group.isTrackSelected(trackIndex)
+        val type = group.type
+
+        val name = when {
+            !format.label.isNullOrBlank() -> format.label!!
+            else -> {
+                val official = trackNameProvider.getTrackName(format)
+                if (official.isNotBlank()) {
+                    official
+                } else when (type) {
+                    C.TRACK_TYPE_TEXT -> format.language?.let { Locale.forLanguageTag(it).displayLanguage }.takeUnless { it.isNullOrBlank() } ?: "字幕 ${trackIndex + 1}"
+                    C.TRACK_TYPE_AUDIO -> "音轨 ${trackIndex + 1}"
+                    C.TRACK_TYPE_VIDEO -> if (format.width > 0 && format.height > 0) "${format.width}x${format.height}" else "视轨 ${trackIndex + 1}"
+                    else -> "轨道 ${trackIndex + 1}"
+                }
+            }
+        }
+
+        val details = when (type) {
+            C.TRACK_TYPE_VIDEO -> {
+                buildList {
+                    if (format.width > 0 && format.height > 0) add("${format.width}x${format.height}")
+                    if (format.bitrate > 0) add("${format.bitrate / 1000} kbps")
+                    if (format.frameRate > 0f) add("${format.frameRate.toInt()} fps")
+                    format.sampleMimeType?.substringAfterLast('/')?.uppercase()?.let { add(it) }
+                }.joinToString(" · ").takeIf { it.isNotBlank() }
+            }
+            C.TRACK_TYPE_AUDIO -> {
+                buildList {
+                    if (format.channelCount > 0) {
+                        when (format.channelCount) {
+                            1 -> add("单声道")
+                            2 -> add("立体声")
+                            6 -> add("5.1 声道")
+                            8 -> add("7.1 声道")
+                            else -> add("${format.channelCount} 声道")
+                        }
+                    }
+                    if (format.sampleRate > 0) add("${format.sampleRate / 1000} kHz")
+                    format.sampleMimeType?.substringAfterLast('/')?.uppercase()?.let { add(it) }
+                }.joinToString(" · ").takeIf { it.isNotBlank() }
+            }
+            C.TRACK_TYPE_TEXT -> {
+                format.sampleMimeType?.substringAfterLast('/')?.uppercase()
+            }
+            else -> null
+        }
+
+        return PlayerTrack(
+            id = "${type}_${groupIndex}_${trackIndex}",
+            name = name,
+            type = type,
+            isSelected = isSelected,
+            groupIndex = groupIndex,
+            trackIndex = trackIndex,
+            language = format.language,
+            details = details,
+        )
+    }
+
+    /**
+     * 选中指定轨道（对齐 FongMi TrackSelectionOverride）
+     */
+    fun selectTrack(track: PlayerTrack) {
+        val groups = exoPlayer.currentTracks.groups.filter { it.type == track.type }
+        val targetGroup = groups.getOrNull(track.groupIndex) ?: return
+        val override = androidx.media3.common.TrackSelectionOverride(targetGroup.mediaTrackGroup, track.trackIndex)
+        val params = exoPlayer.trackSelectionParameters
+            .buildUpon()
+            .setTrackTypeDisabled(track.type, false)
+            .setOverrideForType(override)
+            .build()
+        exoPlayer.trackSelectionParameters = params
+        updateTracks(exoPlayer.currentTracks)
+    }
+
+    /**
+     * 禁用或开启指定轨道类型（如关闭字幕）
+     */
+    fun setTrackTypeDisabled(type: Int, disabled: Boolean) {
+        val builder = exoPlayer.trackSelectionParameters
+            .buildUpon()
+            .setTrackTypeDisabled(type, disabled)
+        if (disabled) {
+            builder.clearOverridesOfType(type)
+        }
+        exoPlayer.trackSelectionParameters = builder.build()
+        updateTracks(exoPlayer.currentTracks)
+    }
+
+    /**
+     * 重置轨道类型到系统自适应默认配置
+     */
+    fun resetTrackTypeToDefault(type: Int) {
+        val params = exoPlayer.trackSelectionParameters
+            .buildUpon()
+            .setTrackTypeDisabled(type, false)
+            .clearOverridesOfType(type)
+            .build()
+        exoPlayer.trackSelectionParameters = params
+        updateTracks(exoPlayer.currentTracks)
+    }
+
+    private fun checkBufferingPolling(isBuffering: Boolean) {
+        if (isBuffering) {
+            startBufferingPolling()
+        } else {
+            stopBufferingPolling()
+        }
+    }
+
+    private fun startBufferingPolling() {
+        if (trafficJob?.isActive == true) return
+        trafficSpeedMeter.reset()
+        val initialSpeed = trafficSpeedMeter.getSpeed() ?: ""
+        _state.update { it.copy(networkSpeed = initialSpeed) }
+        trafficJob = scope.launch(Dispatchers.IO) {
+            while (isActive) {
+                delay(1000L)
+                val speed = trafficSpeedMeter.getSpeed() ?: ""
+                _state.update { it.copy(networkSpeed = speed) }
+            }
+        }
+    }
+
+    private fun stopBufferingPolling() {
+        trafficJob?.cancel()
+        trafficJob = null
+        trafficSpeedMeter.reset()
+        _state.update { it.copy(networkSpeed = "") }
     }
 
     private fun checkProgressPolling() {
@@ -263,7 +620,7 @@ class Players @Inject constructor(
                 _state.update {
                     it.copy(
                         currentPosition = exoPlayer.currentPosition.coerceAtLeast(0L),
-                        duration = exoPlayer.duration.coerceAtLeast(0L),
+                        duration = resolveDuration(it.duration),
                         bufferedPosition = exoPlayer.bufferedPosition.coerceAtLeast(0L),
                     )
                 }
@@ -278,6 +635,60 @@ class Players @Inject constructor(
     }
 
     companion object {
+        const val DEFAULT_USER_AGENT =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+        /**
+         * 智能推断媒体流 MIME 类型（对齐 FongMi / MewPlayer MpvLifecycleCoordinator）
+         * 解决 Node.js 本地代理 (/m3u8-proxy?url=...) 及 URL 参数带 .m3u8 等无直接文件后缀链接的识别问题
+         */
+        fun inferMimeType(url: String, format: String = ""): String? {
+            val f = format.trim().lowercase(Locale.ROOT)
+            if (f == "hls" || f == "m3u8") return MimeTypes.APPLICATION_M3U8
+            if (f == "dash" || f == "mpd") return MimeTypes.APPLICATION_MPD
+            if (f == "ss" || f == "ism") return MimeTypes.APPLICATION_SS
+            if (f == "rtsp") return MimeTypes.APPLICATION_RTSP
+
+            val lower = url.trim().lowercase(Locale.ROOT)
+            return when {
+                lower.contains(".m3u8") || lower.contains("/m3u8-proxy") || lower.contains(".m3u") ||
+                    isProxyM3u8(url) ->
+                    MimeTypes.APPLICATION_M3U8
+                lower.contains(".mpd") ->
+                    MimeTypes.APPLICATION_MPD
+                lower.contains(".ism") ->
+                    MimeTypes.APPLICATION_SS
+                lower.startsWith("rtsp://") ->
+                    MimeTypes.APPLICATION_RTSP
+                else -> null
+            }
+        }
+
+        private fun isProxyM3u8(url: String): Boolean {
+            if (!url.contains("/proxy") && !url.contains("/m3u8-proxy")) return false
+            return try {
+                val raw = if (url.contains("://")) url.substringAfter("://").substringAfter('/', "") else url
+                val segments = raw.split('/', '?', '&', '=').filter { it.length > 15 }
+                segments.any { segment ->
+                    val clean = segment.substringBefore(".m3u8")
+                    val decoded = try {
+                        try {
+                            String(java.util.Base64.getUrlDecoder().decode(clean), Charsets.UTF_8)
+                        } catch (_: Exception) {
+                            String(java.util.Base64.getDecoder().decode(clean), Charsets.UTF_8)
+                        }
+                    } catch (_: Throwable) {
+                        try {
+                            java.net.URLDecoder.decode(clean, "UTF-8")
+                        } catch (_: Throwable) { "" }
+                    }
+                    decoded.contains(".m3u8", ignoreCase = true) || decoded.contains("#EXTM3U", ignoreCase = true)
+                }
+            } catch (_: Exception) {
+                false
+            }
+        }
+
         fun formatDuration(ms: Long): String {
             if (ms <= 0L) return "00:00"
             val totalSeconds = ms / 1000

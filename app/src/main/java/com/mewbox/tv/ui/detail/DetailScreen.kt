@@ -1,104 +1,77 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class)
+
 package com.mewbox.tv.ui.detail
 
-import android.app.Activity
-import android.content.pm.ActivityInfo
-import android.view.ViewGroup
-import android.widget.FrameLayout
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
-import androidx.annotation.OptIn
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Forward10
-import androidx.compose.material.icons.filled.Fullscreen
-import androidx.compose.material.icons.filled.FullscreenExit
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Replay10
-import androidx.compose.material.icons.filled.SwapHoriz
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.ScrollableTabRow
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SuggestionChip
-import androidx.compose.material3.SuggestionChipDefaults
-import androidx.compose.material3.Tab
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.media3.common.util.UnstableApi
-import androidx.media3.ui.PlayerView
-import coil3.compose.AsyncImage
-import com.mewbox.tv.bean.Vod
-import com.mewbox.tv.player.PlaybackState
-import com.mewbox.tv.player.Players
+import com.mewbox.tv.api.tmdb.TmdbClient
 import com.mewbox.tv.ui.components.ErrorState
 import com.mewbox.tv.ui.components.LoadingState
+import com.mewbox.tv.ui.player.FullScreenEpisodeDrawer
+import com.mewbox.tv.ui.player.PlayerToastPill
+import com.mewbox.tv.ui.player.PlayerWindowEffects
+import com.mewbox.tv.ui.player.PresentationMode
+import com.mewbox.tv.ui.player.VideoPlayerViewport
+import com.mewbox.tv.ui.theme.DynamicTheme
+import com.mewbox.tv.ui.theme.ImagePalette
+import com.mewbox.tv.ui.theme.MewBoxTheme
+import com.mewbox.tv.ui.theme.PosterSeedMemory
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
-@OptIn(UnstableApi::class)
-@kotlin.OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+private const val EntrySlideDurationMs = 300
+private const val ContentSlideRatio = 0.2f
+
+/**
+ * 影片详情页 / 全屏播放器调度容器（完全移植 AVBox 播放流程）
+ * 常规点击影片：展示大海报影片详情页，点击播放胶囊或选集进入全屏播放
+ */
 @Composable
 fun DetailScreen(
     onBack: () -> Unit,
@@ -106,652 +79,364 @@ fun DetailScreen(
     viewModel: DetailViewModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
-    val activity = context as? Activity
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val playerState by viewModel.players.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
-    var isContentExpanded by remember { mutableStateOf(false) }
-    var isFullscreen by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
-    // 拦截全屏返回
-    BackHandler(enabled = isFullscreen) {
-        isFullscreen = false
-        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT
-    }
-
-    // 页面销毁时重置回竖屏
-    DisposableEffect(Unit) {
-        onDispose {
-            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT
+    // 若当前条目属于动作拦截（如触发 nodejs webview 配置），立即静默关闭退出，防止海报详情页闪烁
+    LaunchedEffect(state.closeScreen) {
+        if (state.closeScreen) {
+            onBack()
         }
     }
 
-    // 全屏沉浸式系统栏显示与隐藏
-    LaunchedEffect(isFullscreen) {
-        val window = activity?.window ?: return@LaunchedEffect
-        val insetsController = WindowCompat.getInsetsController(window, window.decorView)
-        if (isFullscreen) {
-            insetsController.hide(WindowInsetsCompat.Type.systemBars())
-            insetsController.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        } else {
-            insetsController.show(WindowInsetsCompat.Type.systemBars())
+    if (state.closeScreen) {
+        Box(
+            modifier = modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background),
+        )
+        return
+    }
+
+    var presentation by remember {
+        mutableStateOf(PresentationMode.HIDDEN)
+    }
+    var enteringFullscreen by remember { mutableStateOf(false) }
+    var exitingFullscreen by remember { mutableStateOf(false) }
+
+    val inTransition = enteringFullscreen || exitingFullscreen
+    val isPlayerMounted = presentation.isMounted || inTransition
+    var slideWidthPx by remember { mutableFloatStateOf(0f) }
+    val slideAnim = remember { Animatable(0f) }
+
+    val slideProgress = if (inTransition) slideAnim.value else if (presentation.isFullscreen) 1f else 0f
+    var showFullscreenEpisodeDrawer by remember { mutableStateOf(false) }
+
+    fun enterPlayer() {
+        if (presentation.isFullscreen || enteringFullscreen) return
+        exitingFullscreen = false
+        enteringFullscreen = true
+    }
+
+    // 统一的退出播放动作：返回键与播放器返回按钮共用同一份逻辑
+    fun exitPlayer() {
+        if (exitingFullscreen) return
+        if (enteringFullscreen) {
+            enteringFullscreen = false
+        }
+        exitingFullscreen = true
+        viewModel.onExitFullscreen()
+    }
+
+    // 全屏滑动转场动画驱动（进入 300ms 滑入，退出 300ms 滑出）
+    LaunchedEffect(enteringFullscreen, exitingFullscreen) {
+        when {
+            exitingFullscreen -> {
+                slideAnim.animateTo(0f, tween(EntrySlideDurationMs, easing = FastOutSlowInEasing))
+                presentation = PresentationMode.HIDDEN
+                exitingFullscreen = false
+            }
+            enteringFullscreen -> {
+                slideAnim.animateTo(1f, tween(EntrySlideDurationMs, easing = FastOutSlowInEasing))
+                presentation = PresentationMode.FULLSCREEN
+                enteringFullscreen = false
+            }
+        }
+    }
+
+    val initialPic = viewModel.initialVodPic.ifBlank { state.vod?.vodPic.orEmpty() }
+
+    val backdropUrl = state.tmdbDetail?.backdropPath?.let {
+        TmdbClient.imageUrl(state.tmdbImageBase, it, "w1280")
+    } ?: state.vod?.vodPic
+
+    var backdropSeed by remember {
+        mutableStateOf(PosterSeedMemory.seedOf(initialPic) ?: PosterSeedMemory.seedOf(backdropUrl))
+    }
+
+    // 当 backdropUrl 或 vodPic 发生变化时：
+    // 若新图片已有缓存种子色，立即切换；若尚无缓存，保留当前海报色平滑过渡，切勿重置为 null 导致跳变回默认蓝色
+    LaunchedEffect(backdropUrl, state.vod?.vodPic) {
+        val candidate = PosterSeedMemory.seedOf(backdropUrl)
+            ?: PosterSeedMemory.seedOf(state.vod?.vodPic)
+        if (candidate != null && backdropSeed != candidate) {
+            backdropSeed = candidate
+        }
+    }
+
+    val dynamicColorScheme = backdropSeed?.let { seed ->
+        remember(seed) { DynamicTheme.customScheme(seed, isDark = true) }
+    }
+
+    // 当 ViewModel 触发全屏起播（如豆瓣推荐源跨源检索起播）时同步呈现形态
+    LaunchedEffect(state.startInFullscreen) {
+        if (state.startInFullscreen && presentation == PresentationMode.HIDDEN && !enteringFullscreen) {
+            enterPlayer()
+        }
+    }
+
+    // 播放窗口副作用集中管理（屏幕旋转、沉浸式系统栏、防息屏常亮与恢复）
+    PlayerWindowEffects(
+        isFullscreen = presentation.isFullscreen,
+        playerState = playerState,
+        keepScreenOnExtra = state.isResolvingPlay || state.isAutoSearching,
+    )
+
+    // 拦截物理/手势返回键：
+    BackHandler(enabled = isPlayerMounted) {
+        when {
+            inTransition && enteringFullscreen -> {
+                // 进场动画中用户按返回：优雅取消进场动画，反向退回
+                enteringFullscreen = false
+                exitingFullscreen = true
+                viewModel.onExitFullscreen()
+            }
+            showFullscreenEpisodeDrawer -> {
+                // 全屏侧滑选集抽屉打开时，优先关闭抽屉
+                showFullscreenEpisodeDrawer = false
+            }
+            presentation.isFullscreen && !exitingFullscreen -> {
+                // 全屏中按返回：触发平滑滑出退场
+                exitPlayer()
+            }
         }
     }
 
     LaunchedEffect(state.toastMessage) {
-        state.toastMessage?.let {
-            snackbarHostState.showSnackbar(it)
+        state.toastMessage?.let { msg ->
+            if (presentation.isFullscreen) {
+                snackbarHostState.currentSnackbarData?.dismiss()
+                val job = launch {
+                    snackbarHostState.showSnackbar(
+                        message = msg,
+                        duration = SnackbarDuration.Indefinite,
+                    )
+                }
+                delay(1800)
+                snackbarHostState.currentSnackbarData?.dismiss()
+                job.cancel()
+            } else {
+                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+            }
             viewModel.clearToast()
         }
     }
 
-    // 全屏模式下：直接全屏铺满播放视窗
-    if (isFullscreen && state.vod != null) {
-        Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-            VideoPlayerViewport(
-                vod = state.vod!!,
-                players = viewModel.players,
-                playerState = playerState,
-                isFullscreen = true,
-                currentEpisodeName = state.selectedEpisode?.name ?: "",
-                isResolvingPlay = state.isResolvingPlay,
-                isAutoSearching = state.isAutoSearching,
-                autoSearchMessage = state.autoSearchMessage,
-                onPlayPauseToggle = { viewModel.players.togglePlayPause() },
-                onSeekTo = { viewModel.players.seekTo(it) },
-                onToggleFullscreen = {
-                    isFullscreen = false
-                    activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT
-                },
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
-        return
-    }
-
-    // 常规竖屏模式
-    Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = state.vod?.vodName ?: "影片详情",
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                    }
-                },
-                actions = {
-                    TextButton(onClick = { viewModel.openChangeSourceDialog() }) {
-                        Icon(imageVector = Icons.Default.SwapHoriz, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("换源 (${state.changeSources.size})")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                ),
-            )
-        },
-        modifier = modifier.fillMaxSize(),
-    ) { padding ->
+    // ==================== 统一界面容器（AVBox 风格，沉浸式透明状态栏 & 海报动态取色） ====================
+    MewBoxTheme(darkTheme = true, colorScheme = dynamicColorScheme) {
         Box(
-            modifier = Modifier
+            modifier = modifier
                 .fillMaxSize()
-                .padding(padding),
+                .onSizeChanged { slideWidthPx = it.width.toFloat() }
+                .background(Color.Black),
         ) {
+            // 背景虚化海报（始终平铺在最底层，加载期间即可展示海报底图并提取种子色）
+            val currentBackdrop = backdropUrl ?: state.vod?.vodPic
+            PosterBackdrop(
+                pic = currentBackdrop,
+                onImage = { image ->
+                    scope.launch(Dispatchers.Default) {
+                        val seed = ImagePalette.seedOf(image)
+                        if (seed != null) {
+                            PosterSeedMemory.put(currentBackdrop, seed)
+                            if (backdropSeed != seed) {
+                                backdropSeed = seed
+                            }
+                        }
+                    }
+                },
+            )
+
             when {
+                // 1. 全局 Loading 状态：正在获取影片详情或分集信息，统一展示系统级 Loading（对齐 AVBox）
+                // 顶栏（返回按钮）在拿到影片信息后才展示，加载期仅显示背景海报 + Loading
                 state.isLoading -> {
-                    LoadingState(text = "正在获取影片详情与分集线路...")
+                    LoadingState(text = "")
                 }
-                state.error != null -> {
+
+                // 2. 详情获取失败状态
+                state.error != null && state.vod?.playFlags.isNullOrEmpty() -> {
                     ErrorState(
                         message = state.error ?: "加载失败",
-                        onRetry = {
-                            viewModel.loadDetail(
-                                state.currentSite?.key ?: "",
-                                state.vod?.vodId ?: "",
-                                state.vod?.vodName ?: "",
-                            )
-                        },
+                        onRetry = { viewModel.retry() },
+                    )
+
+                    DetailTopScrim(modifier = Modifier.align(Alignment.TopCenter))
+                    DetailTopBar(
+                        onBack = onBack,
+                        modifier = Modifier.align(Alignment.TopCenter),
                     )
                 }
-                state.vod != null -> {
-                    val vod = state.vod!!
 
-                    Column(
+                // 3. 详情就绪：海报详情层与全屏播放器层同级叠加（支持 300ms 视差滑入/滑出转场）
+                state.vod != null -> {
+                    val vod = requireNotNull(state.vod)
+
+                    // 3.1 海报详情内容主体（带视差负偏移：当 slideProgress 从 0 -> 1 时向左平移 20% 屏幕宽度）
+                    Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .verticalScroll(rememberScrollState()),
-                    ) {
-                        // 1. 播放器视窗区域（竖屏 16:9）
-                        VideoPlayerViewport(
-                            vod = vod,
-                            players = viewModel.players,
-                            playerState = playerState,
-                            isFullscreen = false,
-                            currentEpisodeName = state.selectedEpisode?.name ?: "",
-                            isResolvingPlay = state.isResolvingPlay,
-                            isAutoSearching = state.isAutoSearching,
-                            autoSearchMessage = state.autoSearchMessage,
-                            onPlayPauseToggle = { viewModel.players.togglePlayPause() },
-                            onSeekTo = { viewModel.players.seekTo(it) },
-                            onToggleFullscreen = {
-                                isFullscreen = true
-                                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                            .offset {
+                                IntOffset((-slideProgress * slideWidthPx * ContentSlideRatio).toInt(), 0)
                             },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .aspectRatio(16f / 9f),
+                    ) {
+                        DetailContent(
+                            vod = vod,
+                            tmdbDetail = state.tmdbDetail,
+                            tmdbImageBase = state.tmdbImageBase,
+                            flags = vod.playFlags,
+                            currentFlag = state.selectedFlag,
+                            episodes = state.selectedFlag?.episodes ?: emptyList(),
+                            currentEpisode = state.selectedEpisode,
+                            isEpisodeReversed = state.isEpisodeReversed,
+                            isCompactEpisodeTitle = state.isCompactEpisodeTitle,
+                            changeSources = state.changeSources,
+                            currentSiteKey = state.currentSite?.key ?: "",
+                            currentSourceName = state.currentSite?.name ?: "",
+                            resumeEpisodeText = state.resumeEpisodeText,
+                            onPlay = {
+                                viewModel.startPlayback()
+                                enterPlayer()
+                            },
+                            onToggleReverse = { viewModel.toggleEpisodeSort() },
+                            onToggleCompact = { viewModel.toggleEpisodeCompact() },
+                            onSelectEpisode = { ep ->
+                                viewModel.selectEpisode(ep)
+                                enterPlayer()
+                            },
+                            onSelectFlag = { flag -> viewModel.selectFlag(flag) },
+                            onSelectSource = { targetVod -> viewModel.changeSource(targetVod, shouldAutoPlay = false) },
                         )
 
-                        // 2. 影片基础信息卡片
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
+                        // TMDB 手动重新匹配弹窗
+                        if (state.showTmdbMatchDialog) {
+                            TmdbRematchDialog(
+                                initialKeyword = state.tmdbSearchKeyword,
+                                results = state.tmdbSearchResults,
+                                isSearching = state.isSearchingTmdb,
+                                searchError = state.tmdbSearchError,
+                                isConfigured = state.isTmdbConfigured,
+                                imageBase = state.tmdbImageBase,
+                                onSearch = { viewModel.searchTmdb(it) },
+                                onSelect = { viewModel.applyTmdbMatch(it) },
+                                onDismiss = { viewModel.closeTmdbMatchDialog() },
+                            )
+                        }
+                    }
+
+                    // 3.2 顶部渐变遮罩与固定顶部工具栏（信息加载完成后 300ms 淡入；随转场进度平滑淡出，全屏时彻底不响应点击）
+                    val topBarAlpha = (1f - slideProgress).coerceIn(0f, 1f)
+                    val topBarVisible = topBarAlpha > 0f
+                    // 初始为不可见 + 目标置 true：保证首次进入就绪态时播放淡入动画
+                    val topBarVisibilityState = remember { MutableTransitionState(false) }
+                    LaunchedEffect(topBarVisible) {
+                        topBarVisibilityState.targetState = topBarVisible
+                    }
+                    AnimatedVisibility(
+                        visibleState = topBarVisibilityState,
+                        enter = fadeIn(tween(EntrySlideDurationMs, easing = FastOutSlowInEasing)),
+                        exit = fadeOut(tween(EntrySlideDurationMs, easing = FastOutSlowInEasing)),
+                        modifier = Modifier.align(Alignment.TopCenter),
+                    ) {
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            DetailTopScrim()
+                            DetailTopBar(
+                                onBack = onBack,
+                                onEditTmdb = { viewModel.openTmdbMatchDialog() },
+                                modifier = Modifier.graphicsLayer { alpha = topBarAlpha },
+                            )
+                        }
+                    }
+
+                    // 3.3 全屏播放器视窗（挂载或转场时显示，从屏幕右侧 100% 宽度平滑滑入至全屏）
+                    if (isPlayerMounted) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .offset {
+                                    IntOffset(((1f - slideProgress) * slideWidthPx).toInt(), 0)
+                                }
+                                .background(Color.Black),
+                        ) {
+                            VideoPlayerViewport(
+                                vod = vod,
+                                players = viewModel.players,
+                                playerState = playerState,
+                                currentEpisodeName = state.selectedEpisode?.name ?: "",
+                                hasPrevEpisode = state.hasPreviousEpisode,
+                                hasNextEpisode = state.hasNextEpisode,
+                                isResolvingPlay = state.isResolvingPlay,
+                                isAutoSearching = state.isAutoSearching,
+                                autoSearchMessage = state.autoSearchMessage,
+                                onBack = { exitPlayer() },
+                                onPlayPauseToggle = { viewModel.players.togglePlayPause() },
+                                onSeekTo = { viewModel.players.seekTo(it) },
+                                onPlayPrevious = { viewModel.playPreviousEpisode() },
+                                onPlayNext = { viewModel.playNextEpisode() },
+                                onRefreshPlayback = { viewModel.refreshPlayback() },
+                                onOpenEpisodeDrawer = { showFullscreenEpisodeDrawer = true },
+                                opening = state.opening,
+                                ending = state.ending,
+                                onSetOpening = { viewModel.setOpening() },
+                                onResetOpening = { viewModel.resetOpening() },
+                                onSetEnding = { viewModel.setEnding() },
+                                onResetEnding = { viewModel.resetEnding() },
+                                modifier = Modifier.fillMaxSize(),
+                            )
+
+                            // 全屏侧滑选集抽屉
+                            AnimatedVisibility(
+                                visible = showFullscreenEpisodeDrawer,
+                                enter = slideInHorizontally(initialOffsetX = { it }),
+                                exit = slideOutHorizontally(targetOffsetX = { it }),
+                                modifier = Modifier.fillMaxSize(),
                             ) {
-                                Text(
-                                    text = vod.vodName,
-                                    style = MaterialTheme.typography.headlineSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                OutlinedButton(
-                                    onClick = { viewModel.openChangeSourceDialog() },
-                                    shape = RoundedCornerShape(8.dp),
-                                ) {
-                                    Icon(imageVector = Icons.Default.SwapHoriz, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(text = state.currentSite?.name ?: "切换源")
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (vod.vodYear.isNotEmpty()) {
-                                    Text(vod.vodYear, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                }
-                                if (vod.vodArea.isNotEmpty()) {
-                                    Text(vod.vodArea, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                }
-                                if (vod.vodRemarks.isNotEmpty()) {
-                                    Text(vod.vodRemarks, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
-                                }
-                            }
-
-                            if (vod.vodActor.isNotEmpty()) {
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = "演员：${vod.vodActor}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-
-                            // 剧情简介折叠
-                            if (vod.vodContent.isNotEmpty()) {
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text(
-                                    text = vod.vodContent.replace("<[^>]*>".toRegex(), "").trim(),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = if (isContentExpanded) Int.MAX_VALUE else 3,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.clickable { isContentExpanded = !isContentExpanded },
+                                FullScreenEpisodeDrawer(
+                                    episodes = state.selectedFlag?.episodes ?: emptyList(),
+                                    currentEpisode = state.selectedEpisode,
+                                    isReversed = state.isEpisodeReversed,
+                                    isCompactEpisodeTitle = state.isCompactEpisodeTitle,
+                                    onToggleSort = { viewModel.toggleEpisodeSort() },
+                                    onToggleCompact = { viewModel.toggleEpisodeCompact() },
+                                    onSelectEpisode = {
+                                        viewModel.selectEpisode(it)
+                                        showFullscreenEpisodeDrawer = false
+                                    },
+                                    onClose = { showFullscreenEpisodeDrawer = false },
                                 )
                             }
                         }
+                    }
 
-                        // 3. 豆瓣纯推荐源提示卡片
-                        if (state.isMsearch) {
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 4.dp),
-                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(14.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Info,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                                    )
-                                    Spacer(modifier = Modifier.width(10.dp))
-                                    Text(
-                                        text = if (state.isAutoSearching) "正在全网为您匹配播放源..."
-                                        else "当前为推荐片单。已自动通过跨源检索完成直链嗅探；如需切换请点击【换源】。",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSecondaryContainer,
-                                    )
-                                }
-                            }
-                        }
-
-                        // 4. 多线路切换 Tab
-                        if (vod.playFlags.size > 1) {
-                            val selectedIndex = vod.playFlags.indexOf(state.selectedFlag).coerceAtLeast(0)
-                            ScrollableTabRow(
-                                selectedTabIndex = selectedIndex,
-                                edgePadding = 16.dp,
-                                modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                vod.playFlags.forEach { flag ->
-                                    Tab(
-                                        selected = flag == state.selectedFlag,
-                                        onClick = { viewModel.selectFlag(flag) },
-                                        text = { Text(flag.flag) },
-                                    )
-                                }
-                            }
-                        }
-
-                        // 5. 选集网格
-                        val currentEpisodes = state.selectedFlag?.episodes ?: emptyList()
-                        if (currentEpisodes.isNotEmpty()) {
-                            Column(modifier = Modifier.padding(16.dp)) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Text(
-                                        text = "选集 (${currentEpisodes.size})",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.SemiBold,
-                                    )
-                                    Text(
-                                        text = "线路: ${state.selectedFlag?.flag ?: "默认"}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-
-                                // 多清晰度（网盘源，如 无限4K / 1080P）
-                                if (state.playUrls.size > 1) {
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Text(
-                                            text = "清晰度:",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                        state.playUrls.forEach { pu ->
-                                            val isSelected = pu.url == state.selectedPlayUrl?.url
-                                            FilterChip(
-                                                selected = isSelected,
-                                                onClick = { viewModel.selectPlayUrl(pu) },
-                                                label = { Text(pu.name, style = MaterialTheme.typography.labelSmall) },
-                                                shape = RoundedCornerShape(8.dp),
-                                            )
+                    // 3.4 转场动画期间手势拦截层：防止动画过程中误触任何下层或上层控件
+                    if (inTransition) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .pointerInput(Unit) {
+                                    awaitPointerEventScope {
+                                        while (true) {
+                                            awaitPointerEvent().changes.forEach { it.consume() }
                                         }
                                     }
-                                }
-
-                                Spacer(modifier = Modifier.height(10.dp))
-                                FlowRow(
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                                ) {
-                                    currentEpisodes.forEach { ep ->
-                                        val isSelected = ep == state.selectedEpisode
-                                        SuggestionChip(
-                                            onClick = { viewModel.selectEpisode(ep) },
-                                            label = { Text(ep.name) },
-                                            colors = SuggestionChipDefaults.suggestionChipColors(
-                                                containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerLow,
-                                                labelColor = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
-                                            ),
-                                        )
-                                    }
-                                }
-                            }
-                        }
+                                },
+                        )
                     }
                 }
             }
 
-            // 换源弹窗
-            if (state.showChangeSourceDialog) {
-                ChangeSourceDialog(
-                    currentSiteKey = state.currentSite?.key ?: "",
-                    sources = state.changeSources,
-                    isSearching = state.isSearchingChangeSources,
-                    onSelect = { viewModel.changeSource(it) },
-                    onDismiss = { viewModel.closeChangeSourceDialog() },
-                )
+            // Snackbar 提示宿主（底部导航条安全区对齐）
+            SnackbarHost(
+                hostState = snackbarHostState,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .windowInsetsPadding(WindowInsets.navigationBars)
+                    .padding(bottom = if (presentation.isFullscreen) 76.dp else 16.dp),
+            ) { data ->
+                PlayerToastPill(message = data.visuals.message)
             }
         }
     }
-}
-
-/**
- * 播放器视窗组件：内嵌 ExoPlayer PlayerView，包含遮罩、进度条、全屏切换与快进快退控制
- */
-@OptIn(UnstableApi::class)
-@Composable
-private fun VideoPlayerViewport(
-    vod: Vod,
-    players: Players,
-    playerState: com.mewbox.tv.player.PlayerState,
-    isFullscreen: Boolean,
-    currentEpisodeName: String,
-    isResolvingPlay: Boolean,
-    isAutoSearching: Boolean,
-    autoSearchMessage: String?,
-    onPlayPauseToggle: () -> Unit,
-    onSeekTo: (Long) -> Unit,
-    onToggleFullscreen: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    var showControls by remember { mutableStateOf(true) }
-    var userDraggingProgress by remember { mutableStateOf(false) }
-    var sliderPosition by remember { mutableFloatStateOf(0f) }
-
-    Box(
-        modifier = modifier
-            .background(Color.Black)
-            .clickable { showControls = !showControls },
-        contentAlignment = Alignment.Center,
-    ) {
-        // 底层 PlayerView
-        AndroidView(
-            factory = { ctx ->
-                PlayerView(ctx).apply {
-                    layoutParams = FrameLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                    )
-                    player = players.exoPlayer
-                    useController = false
-                }
-            },
-            modifier = Modifier.fillMaxSize(),
-        )
-
-        // 占位海报（未开始播放或出错时）
-        if (playerState.playbackState == PlaybackState.IDLE && vod.vodPic.isNotEmpty()) {
-            AsyncImage(
-                model = vod.vodPic,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
-
-        // 加载或跨源检索中的 Loading 提示
-        if (isResolvingPlay || isAutoSearching || playerState.playbackState == PlaybackState.BUFFERING) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color(0x66000000)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Text(
-                        text = when {
-                            isAutoSearching -> autoSearchMessage ?: "正在跨源检索全网可用源..."
-                            isResolvingPlay -> "正在解析播放直链..."
-                            else -> "正在缓冲视频..."
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color.White,
-                    )
-                }
-            }
-        }
-
-        // 播放错误提示
-        if (playerState.playbackState == PlaybackState.ERROR) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color(0x88000000)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("播放失败", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.titleMedium)
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(playerState.errorMessage ?: "解析直链失败", color = Color.White, style = MaterialTheme.typography.bodySmall)
-                }
-            }
-        }
-
-        // 自定义覆盖控制层（淡入淡出遮罩）
-        if (showControls) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(
-                                Color(0x77000000),
-                                Color.Transparent,
-                                Color(0x99000000),
-                            )
-                        )
-                    ),
-            ) {
-                // 全屏模式顶部栏：标题与退出全屏小按钮
-                if (isFullscreen) {
-                    Row(
-                        modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        IconButton(onClick = onToggleFullscreen) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "退出全屏",
-                                tint = Color.White,
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "${vod.vodName} ${if (currentEpisodeName.isNotEmpty()) "· $currentEpisodeName" else ""}",
-                            color = Color.White,
-                            style = MaterialTheme.typography.titleMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-
-                // 中心控制器：快退 10s、播放/暂停、快进 10s
-                Row(
-                    modifier = Modifier.align(Alignment.Center),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(28.dp),
-                ) {
-                    IconButton(
-                        onClick = { onSeekTo((playerState.currentPosition - 10_000L).coerceAtLeast(0L)) },
-                        modifier = Modifier
-                            .size(44.dp)
-                            .background(Color(0x55000000), CircleShape),
-                    ) {
-                        Icon(imageVector = Icons.Default.Replay10, contentDescription = "快退10秒", tint = Color.White)
-                    }
-
-                    IconButton(
-                        onClick = onPlayPauseToggle,
-                        modifier = Modifier
-                            .size(56.dp)
-                            .background(Color(0x66000000), CircleShape),
-                    ) {
-                        Icon(
-                            imageVector = if (playerState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = "播放/暂停",
-                            tint = Color.White,
-                            modifier = Modifier.size(36.dp),
-                        )
-                    }
-
-                    IconButton(
-                        onClick = { onSeekTo((playerState.currentPosition + 10_000L).coerceAtMost(playerState.duration)) },
-                        modifier = Modifier
-                            .size(44.dp)
-                            .background(Color(0x55000000), CircleShape),
-                    ) {
-                        Icon(imageVector = Icons.Default.Forward10, contentDescription = "快进10秒", tint = Color.White)
-                    }
-                }
-
-                // 底部控制器：进度条、时间与全屏按钮
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 6.dp),
-                ) {
-                    val duration = playerState.duration
-                    val current = playerState.currentPosition
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = Players.formatDuration(if (userDraggingProgress) (sliderPosition * duration).toLong() else current),
-                                color = Color.White,
-                                style = MaterialTheme.typography.labelSmall,
-                            )
-                            Text(
-                                text = " / ${Players.formatDuration(duration)}",
-                                color = Color.White.copy(alpha = 0.7f),
-                                style = MaterialTheme.typography.labelSmall,
-                            )
-                        }
-
-                        IconButton(
-                            onClick = onToggleFullscreen,
-                            modifier = Modifier.size(32.dp),
-                        ) {
-                            Icon(
-                                imageVector = if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
-                                contentDescription = if (isFullscreen) "退出全屏" else "全屏播放",
-                                tint = Color.White,
-                            )
-                        }
-                    }
-
-                    Slider(
-                        value = if (userDraggingProgress) sliderPosition
-                        else if (duration > 0) (current.toFloat() / duration).coerceIn(0f, 1f) else 0f,
-                        onValueChange = {
-                            userDraggingProgress = true
-                            sliderPosition = it
-                        },
-                        onValueChangeFinished = {
-                            userDraggingProgress = false
-                            onSeekTo((sliderPosition * duration).toLong())
-                        },
-                        colors = SliderDefaults.colors(
-                            thumbColor = MaterialTheme.colorScheme.primary,
-                            activeTrackColor = MaterialTheme.colorScheme.primary,
-                            inactiveTrackColor = Color.White.copy(alpha = 0.3f),
-                        ),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            }
-        }
-    }
-}
-
-/**
- * 换源弹窗
- */
-@Composable
-private fun ChangeSourceDialog(
-    currentSiteKey: String,
-    sources: List<Vod>,
-    isSearching: Boolean,
-    onSelect: (Vod) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("选择播放源", modifier = Modifier.weight(1f))
-                if (isSearching) {
-                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                }
-            }
-        },
-        text = {
-            if (sources.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(120.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(if (isSearching) "正在检索全网可用源..." else "暂无其它可用源")
-                }
-            } else {
-                LazyColumn(modifier = Modifier.fillMaxWidth()) {
-                    items(sources, key = { "${it.siteKey}_${it.vodId}" }) { item ->
-                        val isSelected = item.siteKey == currentSiteKey
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onSelect(item) }
-                                .padding(vertical = 12.dp, horizontal = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = item.siteName.ifEmpty { item.siteKey },
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                )
-                                if (item.vodRemarks.isNotEmpty()) {
-                                    Text(
-                                        text = item.vodRemarks,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                            }
-                            if (isSelected) {
-                                Icon(
-                                    imageVector = Icons.Default.Check,
-                                    contentDescription = "当前选择",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
-        },
-    )
 }

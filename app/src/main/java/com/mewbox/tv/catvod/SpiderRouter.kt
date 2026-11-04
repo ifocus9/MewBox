@@ -11,6 +11,10 @@ class SpiderRouter @Inject constructor(
 ) {
     fun isSupported(site: Site): Boolean = loaders.any { it.supports(site) }
 
+    /** 站点是否走共享下游运行时的引擎（Node.js 等），调用方需对其单独限流 */
+    fun isRuntimeShared(site: Site): Boolean =
+        loaders.any { it.supports(site) && it.sharesRuntime }
+
     fun spider(site: Site): Spider =
         loaders.firstOrNull { it.supports(site) }?.getSpider(site)
             ?: throw UnsupportedOperationException("不支持的站点类型: ${site.type} (${site.name})")

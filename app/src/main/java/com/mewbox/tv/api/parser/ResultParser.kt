@@ -7,6 +7,7 @@ import com.mewbox.tv.bean.Result
 import com.mewbox.tv.bean.Site
 import com.mewbox.tv.bean.Vod
 import com.mewbox.tv.bean.VodClass
+import com.mewbox.tv.bean.WebOptions
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -32,18 +33,23 @@ object ResultParser {
     fun parseResult(text: String): Result {
         val root = parseJson(text) as? JsonObject ?: return Result()
         val (primaryUrl, playUrls) = parsePlayUrls(root["url"])
+        val web = root["web"]?.let { WebOptions.fromJsonElement(it) }?.takeIf { it.isValid() }
+        val msg = root["msg"].str()
         return Result(
             classes = root["class"].asArray().mapNotNull(::parseClass),
             list = root["list"].asArray().mapNotNull(::parseVod),
             url = primaryUrl,
             playUrls = playUrls,
             header = parseHeader(root["header"]),
+            format = root["format"].str(),
             parse = root["parse"].int(),
             jx = root["jx"].int(),
             flag = root["flag"].str(),
             page = root["page"].int(1).coerceAtLeast(1),
             pageCount = root["pagecount"].int(1).coerceAtLeast(1),
             total = root["total"].int(),
+            msg = msg,
+            web = web,
         )
     }
 
@@ -102,8 +108,17 @@ object ResultParser {
         val o = e as? JsonObject ?: return null
         val from = o["vod_play_from"].str()
         val url = o["vod_play_url"].str()
+        val tag = o["vod_tag"].str().ifEmpty { o["tag"].str() }
+        val vodId = o["vod_id"].str()
+        val explicitAction = o["action"].str()
+        val action = when {
+            explicitAction.isNotEmpty() -> explicitAction
+            tag.equals("action", ignoreCase = true) -> vodId
+            Vod.isActionId(vodId) -> vodId
+            else -> ""
+        }
         return Vod(
-            vodId = o["vod_id"].str(),
+            vodId = vodId,
             vodName = o["vod_name"].str(),
             vodPic = o["vod_pic"].str(),
             vodRemarks = o["vod_remarks"].str(),
@@ -116,6 +131,7 @@ object ResultParser {
             vodPlayFrom = from,
             vodPlayUrl = url,
             playFlags = parseFlags(from, url),
+            action = action,
         )
     }
 
@@ -147,6 +163,7 @@ object ResultParser {
             val o = e as? JsonObject ?: return@mapIndexedNotNull null
             val key = o["key"].str()
             if (key.isBlank()) return@mapIndexedNotNull null
+            val isConfigSite = key.contains("baseset", ignoreCase = true)
             Site(
                 key = key,
                 name = o["name"].str().ifBlank { key },
@@ -154,11 +171,11 @@ object ResultParser {
                 api = o["api"].str(),
                 ext = o["ext"].let { if (it is JsonPrimitive) it.str() else if (it == null || it is JsonNull) "" else it.toString() },
                 jar = o["jar"].str(),
-                searchable = o["searchable"].int(1) == 1,
-                quickSearch = o["quickSearch"].int(0) == 1,
+                searchable = o["searchable"].int(if (isConfigSite) 0 else 1),
+                quickSearch = o["quickSearch"].int(if (isConfigSite) 0 else 1) == 1,
                 filterable = o["filterable"].int(1) == 1,
                 indexs = o["indexs"].int(0) == 1,
-                changeable = o["changeable"].int(1) == 1,
+                changeable = o["changeable"].int(if (isConfigSite) 0 else 1) == 1,
                 hide = o["hide"].int(0) == 1,
                 priority = index,
             )

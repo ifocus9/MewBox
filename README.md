@@ -1,7 +1,11 @@
-# 打包轻量 Release 版（推荐）
+# MewBox
 
-.\gradlew.bat assembleRelease
+## 打包
 
-# 或打包 Debug 版
+```bash
+# Release 版（正式签名，可分发）
+./gradlew assembleRelease
 
-.\gradlew.bat assembleDebug
+# Debug 版（本机调试）
+./gradlew assembleDebug
+```
