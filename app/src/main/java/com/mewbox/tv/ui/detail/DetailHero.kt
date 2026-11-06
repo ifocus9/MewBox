@@ -8,9 +8,13 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,6 +27,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.wrapContentSize
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
@@ -201,6 +207,7 @@ fun DetailHero(
     resumeEpisodeText: String?,
     onPlay: () -> Unit,
     modifier: Modifier = Modifier,
+    onTitleLongClick: (() -> Unit)? = null,
 ) {
     val configuration = LocalConfiguration.current
     val imageHeight = (configuration.screenHeightDp * HERO_IMAGE_HEIGHT_RATIO)
@@ -300,6 +307,7 @@ fun DetailHero(
                     title = vod.vodName,
                     tmdbDetail = tmdbDetail,
                     tmdbImageBase = tmdbImageBase,
+                    onLongClick = onTitleLongClick,
                 )
             }
         }
@@ -441,42 +449,66 @@ private fun DetailHeroPoster(
 
 
 /**
- * 标题显示：TMDB Logo 优先，否则显示粗体片名
+ * 标题显示：TMDB Logo 优先，否则显示粗体片名（支持长按触发快搜换源）
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun DetailHeroTitle(
     title: String,
     tmdbDetail: TmdbDetail?,
     tmdbImageBase: String,
+    onLongClick: (() -> Unit)? = null,
 ) {
     val base = tmdbImageBase.trimEnd('/').ifEmpty { "https://image.tmdb.org/t/p" }
     val logoPath = tmdbDetail?.images?.logos?.firstOrNull()?.filePath
 
-    if (!logoPath.isNullOrEmpty()) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(0.85f)
-                .height(HeroLogoHeight),
-            contentAlignment = Alignment.Center,
-        ) {
-            AsyncImage(
-                model = "$base/original$logoPath",
-                contentDescription = title,
-                contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxSize(),
+    val clickModifier = if (onLongClick != null) {
+        Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .combinedClickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = LocalIndication.current,
+                onClick = {},
+                onLongClick = onLongClick,
+            )
+    } else {
+        Modifier
+    }
+
+    Box(
+        modifier = Modifier
+            .wrapContentSize()
+            .then(clickModifier),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (!logoPath.isNullOrEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(0.85f)
+                    .height(HeroLogoHeight),
+                contentAlignment = Alignment.Center,
+            ) {
+                AsyncImage(
+                    model = "$base/original$logoPath",
+                    contentDescription = title,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        } else {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight(800),
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .wrapContentWidth()
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
             )
         }
-    } else {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight(800),
-            color = MaterialTheme.colorScheme.onSurface,
-            textAlign = TextAlign.Center,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.fillMaxWidth(),
-        )
     }
 }
 

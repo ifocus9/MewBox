@@ -54,7 +54,7 @@ private val PosterCinemaPalettes = listOf(
  */
 @Composable
 fun PosterPlaceholder(
-    title: String,
+    title: String = "",
     modifier: Modifier = Modifier,
     isHero: Boolean = false,
 ) {

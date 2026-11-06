@@ -30,7 +30,7 @@ fun PlayerWindowEffects(
     val context = LocalContext.current
     val activity = context as? Activity
 
-    // 智能屏幕旋转策略（感知视频真实宽高比例：竖屏短剧保持竖屏全屏，横屏视频旋转为传感器横屏）
+    // 智能屏幕旋转策略（感知视频真实宽高比例：进入全屏默认横屏避免慢半拍；若检测为竖屏短剧则自适应保持竖屏）
     LaunchedEffect(isFullscreen, playerState.videoWidth, playerState.videoHeight) {
         val currentActivity = activity ?: return@LaunchedEffect
         if (!isFullscreen) {
@@ -39,13 +39,12 @@ fun PlayerWindowEffects(
         }
         val width = playerState.videoWidth
         val height = playerState.videoHeight
-        if (width > 0 && height > 0) {
-            val isPortraitVideo = height > width
-            currentActivity.requestedOrientation = if (isPortraitVideo) {
-                ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT
-            } else {
-                ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-            }
+        // 明确检测到是竖屏视频（如竖屏短剧）才切竖屏，否则（包括初始加载尚未获取到尺寸时）一律立即横屏
+        val isPortraitVideo = width > 0 && height > 0 && height > width
+        currentActivity.requestedOrientation = if (isPortraitVideo) {
+            ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         }
     }
 

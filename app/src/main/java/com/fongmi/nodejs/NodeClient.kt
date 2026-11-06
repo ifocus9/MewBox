@@ -56,6 +56,7 @@ class NodeClient(
     private val context: Context = context.applicationContext ?: context
     private val profileLock = Any()
     private val calls = Collections.newSetFromMap(ConcurrentHashMap<Call, Boolean>())
+    private val callThreads = ConcurrentHashMap<Call, Thread>()
     private val initializations = LinkedHashMap<String, String>()
     private val pendingClears = AtomicInteger()
 
@@ -86,7 +87,7 @@ class NodeClient(
         private val PLAY_TIMEOUT_MILLIS = TimeUnit.SECONDS.toMillis(60)
         private const val MAX_CONFIG_RESPONSE_BYTES = 4L * 1024 * 1024
         private const val MAX_JSON_RESPONSE_BYTES = 16L * 1024 * 1024
-        private val LEGACY_LOOPBACK = Pattern.compile("http://(?:127\\.0\\.0\\.1|localhost):9978(?=[/?#|$\\s\"']|$)")
+        private val LEGACY_LOOPBACK = Pattern.compile("http://(?:127\\.0\\.0\\.1|localhost):(?:9978|9988)(?=[/?#|$\\s\"']|$)")
         private val JSON = "application/json; charset=utf-8".toMediaType()
 
         private val CLIENT = client(REQUEST_TIMEOUT_MILLIS)
@@ -116,6 +117,7 @@ class NodeClient(
             while (current != null) {
                 if (current is InterruptedException) return true
                 if (current is InterruptedIOException && !timedOut) return true
+                if (current is IOException && "Canceled".equals(current.message, ignoreCase = true)) return true
                 current = current.cause
             }
             return Thread.currentThread().isInterrupted
@@ -258,7 +260,9 @@ class NodeClient(
             }
             // 确实要换包才打断：清掉旧的站点初始化记录，再重启运行时
             session++
-            initializations.clear()
+            synchronized(initializations) {
+                initializations.clear()
+            }
             onStage?.invoke(Stage.STARTING)
             start(prepared)
             val result = NodeConfigMapper.transform(get("/config"))
@@ -358,7 +362,9 @@ class NodeClient(
     private fun clearRuntime() {
         session++
         cancelRequests()
-        initializations.clear()
+        synchronized(initializations) {
+            initializations.clear()
+        }
         stopService()
         resetRuntimeState()
     }
@@ -395,6 +401,18 @@ class NodeClient(
             }
         }
         calls.clear()
+        callThreads.clear()
+    }
+
+    fun cancelCallsForThread(thread: Thread) {
+        for ((call, owner) in callThreads) {
+            if (owner === thread) {
+                try {
+                    call.cancel()
+                } catch (_: Exception) {
+                }
+            }
+        }
     }
 
     fun cancelLoad() {
@@ -505,11 +523,12 @@ class NodeClient(
         }.toString()
     }
 
-    @Synchronized
     @Throws(Exception::class)
     fun initialize(api: String, body: JsonObject) {
         post(NodeRoute.append(api, "/init"), body)
-        initializations[api] = body.toString()
+        synchronized(initializations) {
+            initializations[api] = body.toString()
+        }
     }
 
     @Throws(Exception::class)
@@ -544,7 +563,7 @@ class NodeClient(
                 readResponse(response, state, MAX_CONFIG_RESPONSE_BYTES)
             }
         } finally {
-            calls.remove(call)
+            unregisterCall(call)
         }
     }
 
@@ -563,7 +582,7 @@ class NodeClient(
                 readResponse(response, state, MAX_JSON_RESPONSE_BYTES)
             }
         } finally {
-            calls.remove(call)
+            unregisterCall(call)
         }
     }
 
@@ -588,8 +607,8 @@ class NodeClient(
         } catch (first: Exception) {
             checkSession(state)
             if (!isTransportFailure(first) || isInterrupted(first)) throw first
+            // 单次请求超时仅代表目标远端站点响应慢，不应调用 invalidate() 杀掉整个共享 Node 进程
             if (hasCause(first, SocketTimeoutException::class.java)) {
-                invalidate(state, first)
                 throw first
             }
             try {
@@ -621,7 +640,8 @@ class NodeClient(
 
     @Throws(Exception::class)
     private fun replayInitializations() {
-        for ((key, value) in initializations) {
+        val snapshotEntries = synchronized(initializations) { ArrayList(initializations.entries) }
+        for ((key, value) in snapshotEntries) {
             val body = Json.parseToJsonElement(value) as? JsonObject ?: continue
             executePost(snapshot(), NodeRoute.append(key, "/init"), body)
         }
@@ -641,7 +661,13 @@ class NodeClient(
         checkCurrent(state)
         val call = client.newCall(request.newBuilder().tag(AtomicBoolean::class.java, state.cancellation).build())
         calls.add(call)
+        callThreads[call] = Thread.currentThread()
         return call
+    }
+
+    private fun unregisterCall(call: Call) {
+        calls.remove(call)
+        callThreads.remove(call)
     }
 
     @Synchronized
@@ -722,7 +748,7 @@ class NodeClient(
             checkCurrent(state)
         } catch (e: Exception) {
             response?.close()
-            calls.remove(call)
+            unregisterCall(call)
             throw e
         }
         val body = response.body
@@ -890,7 +916,7 @@ class NodeClient(
                 super.close()
             } finally {
                 response.close()
-                calls.remove(call)
+                unregisterCall(call)
             }
         }
     }

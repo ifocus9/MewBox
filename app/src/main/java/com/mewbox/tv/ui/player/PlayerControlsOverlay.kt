@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -71,6 +72,14 @@ import com.mewbox.tv.player.Players
 private val QuickActionButtonPadding = PaddingValues(horizontal = 10.dp, vertical = 3.dp)
 
 /**
+ * 底部控制栏整体下移量。
+ * 底栏原本以 BottomCenter 对齐，内部 bottom padding 为 insets.bottom + 4.dp，
+ * 这里用 offset 把进度条与快捷工具栏一起往下推，不改动内部间距与安全区左右边距。
+ * 注意：该值不宜超过 insets.bottom + 4.dp，否则底部快捷按钮会贴底甚至被裁切 / 误触系统手势。
+ */
+private val PlayerBottomBarDownOffset = 12.dp
+
+/**
  * 屏幕锁定时的单解锁按钮浮层
  */
 @Composable
@@ -110,6 +119,7 @@ internal fun PlayerControlsOverlay(
     showCenterControls: Boolean,
     vod: Vod,
     playerState: PlayerState,
+    isLandscape: Boolean = true,
     currentEpisodeName: String,
     hasPrevEpisode: Boolean,
     hasNextEpisode: Boolean,
@@ -163,6 +173,7 @@ internal fun PlayerControlsOverlay(
                 onShowMediaInfo = onShowMediaInfo,
                 insets = insets,
                 modifier = Modifier.align(Alignment.TopStart),
+                isLandscape = isLandscape,
             )
 
             // B. 中心控制区 (上一集、播放/暂停、下一集)，加载或报错时隐藏避免与中心状态浮层重叠
@@ -203,6 +214,7 @@ internal fun PlayerControlsOverlay(
                 duration = playerState.duration,
                 currentPosition = playerState.currentPosition,
                 bufferedPosition = playerState.bufferedPosition,
+                isLandscape = isLandscape,
                 externalSeekPosition = externalSeekPosition,
                 onSeekTo = onSeekTo,
                 onRefreshPlayback = onRefreshPlayback,
@@ -217,7 +229,9 @@ internal fun PlayerControlsOverlay(
                 onSetEnding = onSetEnding,
                 onResetEnding = onResetEnding,
                 insets = insets,
-                modifier = Modifier.align(Alignment.BottomCenter),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .offset(y = PlayerBottomBarDownOffset),
             )
         }
     }
@@ -233,6 +247,7 @@ private fun PlayerTopBar(
     onShowMediaInfo: () -> Unit,
     insets: PlayerSafeInsets,
     modifier: Modifier = Modifier,
+    isLandscape: Boolean = true,
 ) {
     CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides Dp.Unspecified) {
         Row(
@@ -246,20 +261,21 @@ private fun PlayerTopBar(
                 ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(
-                onClick = onBack,
-                modifier = Modifier.size(48.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "返回",
-                    tint = Color.White,
-                    modifier = Modifier.size(26.dp),
-                )
+            if(isLandscape){
+                IconButton(
+                    onClick = onBack,
+                    modifier = Modifier.size(48.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "返回",
+                        tint = Color.White,
+                        modifier = Modifier.size(26.dp),
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(6.dp))
             }
-
-            Spacer(modifier = Modifier.width(6.dp))
-
             Column(
                 modifier = Modifier
                     .weight(1f)
@@ -275,8 +291,7 @@ private fun PlayerTopBar(
                     text = titleText,
                     color = Color.White,
                     style = MaterialTheme.typography.titleMedium.copy(
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 16.sp,
                     ),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -329,53 +344,55 @@ private fun PlayerCenterControls(
     onPlayNext: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Row(
-        modifier = modifier,
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(32.dp),
-    ) {
-        IconButton(
-            onClick = onPlayPrevious,
-            enabled = hasPrevEpisode,
-            modifier = Modifier
-                .size(48.dp)
-                .background(if (hasPrevEpisode) Color(0x55000000) else Color(0x22000000), CircleShape),
+    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides Dp.Unspecified) {
+        Row(
+            modifier = modifier,
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(24.dp),
         ) {
-            Icon(
-                imageVector = Icons.Default.SkipPrevious,
-                contentDescription = "上一集",
-                tint = if (hasPrevEpisode) Color.White else Color.White.copy(alpha = 0.3f),
-                modifier = Modifier.size(26.dp),
-            )
-        }
+            IconButton(
+                onClick = onPlayPrevious,
+                enabled = hasPrevEpisode,
+                modifier = Modifier
+                    .size(42.dp)
+                    .background(if (hasPrevEpisode) Color(0x55000000) else Color(0x22000000), CircleShape),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.SkipPrevious,
+                    contentDescription = "上一集",
+                    tint = if (hasPrevEpisode) Color.White else Color.White.copy(alpha = 0.3f),
+                    modifier = Modifier.size(20.dp),
+                )
+            }
 
-        IconButton(
-            onClick = onPlayPauseToggle,
-            modifier = Modifier
-                .size(64.dp)
-                .background(Color(0x77000000), CircleShape),
-        ) {
-            Icon(
-                imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                contentDescription = "播放/暂停",
-                tint = Color.White,
-                modifier = Modifier.size(40.dp),
-            )
-        }
+            IconButton(
+                onClick = onPlayPauseToggle,
+                modifier = Modifier
+                    .size(50.dp)
+                    .background(Color(0x77000000), CircleShape),
+            ) {
+                Icon(
+                    imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    contentDescription = "播放/暂停",
+                    tint = Color.White,
+                    modifier = Modifier.size(30.dp),
+                )
+            }
 
-        IconButton(
-            onClick = onPlayNext,
-            enabled = hasNextEpisode,
-            modifier = Modifier
-                .size(48.dp)
-                .background(if (hasNextEpisode) Color(0x55000000) else Color(0x22000000), CircleShape),
-        ) {
-            Icon(
-                imageVector = Icons.Default.SkipNext,
-                contentDescription = "下一集",
-                tint = if (hasNextEpisode) Color.White else Color.White.copy(alpha = 0.3f),
-                modifier = Modifier.size(26.dp),
-            )
+            IconButton(
+                onClick = onPlayNext,
+                enabled = hasNextEpisode,
+                modifier = Modifier
+                    .size(42.dp)
+                    .background(if (hasNextEpisode) Color(0x55000000) else Color(0x22000000), CircleShape),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.SkipNext,
+                    contentDescription = "下一集",
+                    tint = if (hasNextEpisode) Color.White else Color.White.copy(alpha = 0.3f),
+                    modifier = Modifier.size(20.dp),
+                )
+            }
         }
     }
 }
@@ -385,6 +402,7 @@ private fun PlayerBottomBar(
     duration: Long,
     currentPosition: Long,
     bufferedPosition: Long,
+    isLandscape: Boolean = true,
     externalSeekPosition: Long?,
     onSeekTo: (Long) -> Unit,
     onRefreshPlayback: () -> Unit = {},
@@ -429,7 +447,7 @@ private fun PlayerBottomBar(
                 start = insets.horizontal + 14.dp,
                 end = insets.horizontal + 14.dp,
                 top = 6.dp,
-                bottom = insets.bottom + 6.dp,
+                bottom = insets.bottom + 4.dp,
             ),
     ) {
         // 进度条行
@@ -513,9 +531,12 @@ private fun PlayerBottomBar(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 PlayerQuickActionButton(text = "刷新", onClick = onRefreshPlayback)
-                PlayerQuickActionButton(text = "字幕", onClick = onShowSubtitleTracks)
-                PlayerQuickActionButton(text = "音轨", onClick = onShowAudioTracks)
-                PlayerQuickActionButton(text = "视轨", onClick = onShowVideoTracks)
+                // 仅在横屏模式下展示轨道切换按钮；竖屏（短剧场景）隐藏，节省横向空间并避免误触
+                if (isLandscape) {
+                    PlayerQuickActionButton(text = "字幕", onClick = onShowSubtitleTracks)
+                    PlayerQuickActionButton(text = "音轨", onClick = onShowAudioTracks)
+                    PlayerQuickActionButton(text = "视轨", onClick = onShowVideoTracks)
+                }
 
                 Spacer(modifier = Modifier.weight(1f))
 

@@ -5,21 +5,27 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -34,6 +40,7 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.kyant.capsule.ContinuousCapsule
 import kotlin.math.hypot
 
 /**
@@ -142,6 +149,84 @@ fun VodGridSkeletonGroup(
     ) {
         items(count) {
             VodGridSkeleton()
+        }
+    }
+}
+
+/**
+ * 影视单列横向卡片骨架项（严格对齐 SearchResultCard 尺寸与布局）
+ */
+@Composable
+fun VodListSkeleton(
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = Color(0xFFF8F9FB),
+        border = BorderStroke(1.dp, Color(0xFFECEEF2)),
+        modifier = modifier
+            .fillMaxWidth()
+            .height(116.dp),
+    ) {
+        Row(modifier = Modifier.fillMaxSize()) {
+            SkeletonBox(
+                modifier = Modifier
+                    .width(92.dp)
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(topStart = 12.dp, bottomStart = 12.dp)),
+            )
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    SkeletonBox(
+                        modifier = Modifier
+                            .fillMaxWidth(0.7f)
+                            .height(16.dp)
+                            .clip(RoundedCornerShape(4.dp)),
+                        shape = RoundedCornerShape(4.dp),
+                    )
+                    SkeletonBox(
+                        modifier = Modifier
+                            .fillMaxWidth(0.4f)
+                            .height(12.dp)
+                            .clip(RoundedCornerShape(4.dp)),
+                        shape = RoundedCornerShape(4.dp),
+                    )
+                }
+                SkeletonBox(
+                    modifier = Modifier
+                        .width(64.dp)
+                        .height(18.dp)
+                        .clip(ContinuousCapsule),
+                    shape = ContinuousCapsule,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 影视单列列表骨架屏
+ */
+@Composable
+fun VodListSkeletonGroup(
+    modifier: Modifier = Modifier,
+    count: Int = 10,
+    contentPadding: PaddingValues = PaddingValues(top = 6.dp, bottom = 32.dp, start = 8.dp, end = 8.dp),
+) {
+    LazyColumn(
+        contentPadding = contentPadding,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = modifier.fillMaxSize(),
+        userScrollEnabled = false,
+    ) {
+        items(count) {
+            VodListSkeleton()
         }
     }
 }

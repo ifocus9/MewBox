@@ -1,6 +1,5 @@
 package com.mewbox.tv.ui.home
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -14,15 +13,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -39,12 +35,11 @@ import androidx.compose.ui.unit.sp
 import com.kyant.capsule.ContinuousCapsule
 import com.mewbox.tv.R
 import com.mewbox.tv.ui.components.glassTopBarSurface
-import com.mewbox.tv.ui.theme.LiquidGlassDefaults
 import androidx.compose.foundation.interaction.MutableInteractionSource
 
 /**
  * 首页顶部操作栏：
- * - 左侧 siteCapsule 站点选择胶囊（带圆角/阴影/Logo/展开箭头），支持液态玻璃/传统 Surface 降级
+ * - 左侧 siteCapsule 站点选择胶囊（带圆角/阴影/Logo/展开箭头），自适应液态玻璃与拟态玻璃
  * - 右侧搜索图标 (🔍)
  */
 @Composable
@@ -57,8 +52,6 @@ fun HomeTopBar(
     onSearchClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val glassSupported = LiquidGlassDefaults.isSupported
-
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -123,55 +116,29 @@ fun HomeTopBar(
             }
         }
 
-        if (glassSupported) {
-            Box(
-                modifier = Modifier
-                    .glassTopBarSurface(ContinuousCapsule, Color.White)
-                    .heightIn(min = 36.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                siteCapsuleContent()
-            }
-        } else {
-            Surface(
-                shape = RoundedCornerShape(17.dp),
-                color = Color.White,
-                shadowElevation = 3.dp,
-                border = BorderStroke(
-                    0.5.dp,
-                    Color(0x14000000),
-                ),
-                modifier = Modifier.clip(RoundedCornerShape(17.dp)),
-            ) {
-                siteCapsuleContent()
-            }
+        Box(
+            modifier = Modifier
+                .glassTopBarSurface(ContinuousCapsule, Color.White)
+                .heightIn(min = 36.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            siteCapsuleContent()
         }
 
         // 右侧操作图标：搜索(🔍)
-        if (glassSupported) {
-            Box(
-                modifier = Modifier
-                    .size(38.dp)
-                    .glassTopBarSurface(CircleShape, MaterialTheme.colorScheme.surfaceBright)
-                    .clickable { onSearchClick() },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Search,
-                    contentDescription = "搜索",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(22.dp),
-                )
-            }
-        } else {
-            IconButton(onClick = onSearchClick, modifier = Modifier.size(38.dp)) {
-                Icon(
-                    imageVector = Icons.Default.Search,
-                    contentDescription = "搜索",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(22.dp),
-                )
-            }
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .glassTopBarSurface(CircleShape, MaterialTheme.colorScheme.surfaceBright)
+                .clickable { onSearchClick() },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Default.Search,
+                contentDescription = "搜索",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(22.dp),
+            )
         }
     }
 }

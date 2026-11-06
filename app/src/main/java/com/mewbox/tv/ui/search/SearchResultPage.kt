@@ -48,8 +48,8 @@ import com.mewbox.tv.bean.Vod
 import com.mewbox.tv.ui.components.EmptyState
 import com.mewbox.tv.ui.components.VodCard
 import com.mewbox.tv.ui.components.VodGridSkeletonGroup
+import com.mewbox.tv.ui.components.VodListSkeletonGroup
 import com.mewbox.tv.ui.components.glassTopBarSurface
-import com.mewbox.tv.ui.theme.LiquidGlassDefaults
 
 /**
  * 搜索结果聚合页（严格对齐 MewPlayer CollectFragment 视觉与交互）
@@ -63,8 +63,6 @@ fun SearchResultPage(
     onVodClick: (Vod) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val glassSupported = LiquidGlassDefaults.isSupported
-
     // 计算左侧站点聚合侧栏条目
     val sidebarItems = remember(state.results) {
         val totalCount = state.results.size
@@ -101,29 +99,19 @@ fun SearchResultPage(
                 modifier = Modifier
                     .weight(1f),
             ) {
-                if (glassSupported) {
-                    Box(
-                        modifier = Modifier
-                            .size(40.dp)
-                            .glassTopBarSurface(CircleShape, Color(0xFFF4F5F7))
-                            .clickable(onClick = onBackToInput),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "返回搜索",
-                            tint = Color(0xFF1F2329),
-                            modifier = Modifier.size(22.dp),
-                        )
-                    }
-                } else {
-                    IconButton(onClick = onBackToInput, modifier = Modifier.size(40.dp)) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "返回搜索",
-                            tint = Color(0xFF1F2329),
-                        )
-                    }
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .glassTopBarSurface(CircleShape, Color(0xFFF4F5F7))
+                        .clickable(onClick = onBackToInput),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "返回搜索",
+                        tint = Color(0xFF1F2329),
+                        modifier = Modifier.size(22.dp),
+                    )
                 }
 
                 Spacer(modifier = Modifier.width(6.dp))
@@ -133,18 +121,10 @@ fun SearchResultPage(
                     modifier = Modifier
                         .weight(1f)
                         .height(38.dp)
-                        .then(
-                            if (glassSupported) {
-                                Modifier.glassTopBarSurface(
-                                    shape = ContinuousCapsule,
-                                    fallbackColor = Color(0xFFF4F5F7),
-                                    pressEffect = false,
-                                )
-                            } else {
-                                Modifier
-                                    .clip(RoundedCornerShape(19.dp))
-                                    .background(Color(0xFFF4F5F7))
-                            }
+                        .glassTopBarSurface(
+                            shape = ContinuousCapsule,
+                            fallbackColor = Color(0xFFF4F5F7),
+                            pressEffect = false,
                         )
                         .clickable(onClick = onBackToInput)
                         .padding(horizontal = 12.dp),
@@ -174,30 +154,19 @@ fun SearchResultPage(
             }
 
             // 单双列切换按钮
-            if (glassSupported) {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .glassTopBarSurface(CircleShape, Color(0xFFF4F5F7))
-                        .clickable(onClick = onToggleColumn),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = if (state.isDoubleColumn) Icons.Default.ViewAgenda else Icons.Default.GridView,
-                        contentDescription = "切换单双列",
-                        tint = Color(0xFF1F2329),
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
-            } else {
-                IconButton(onClick = onToggleColumn, modifier = Modifier.size(40.dp)) {
-                    Icon(
-                        imageVector = if (state.isDoubleColumn) Icons.Default.ViewAgenda else Icons.Default.GridView,
-                        contentDescription = "切换单双列",
-                        tint = Color(0xFF1F2329),
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .glassTopBarSurface(CircleShape, Color(0xFFF4F5F7))
+                .clickable(onClick = onToggleColumn),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = if (state.isDoubleColumn) Icons.Default.ViewAgenda else Icons.Default.GridView,
+                    contentDescription = "切换单双列",
+                    tint = Color(0xFF1F2329),
+                    modifier = Modifier.size(20.dp),
+                )
             }
         }
 
@@ -259,7 +228,16 @@ fun SearchResultPage(
                 }
                 when {
                     displayedVods.isEmpty() && state.isSearching -> {
-                        VodGridSkeletonGroup(contentPadding = PaddingValues(10.dp))
+                        if (state.isDoubleColumn) {
+                            VodGridSkeletonGroup(
+                                columns = 2,
+                                contentPadding = PaddingValues(top = 6.dp, bottom = 32.dp, start = 8.dp, end = 8.dp),
+                            )
+                        } else {
+                            VodListSkeletonGroup(
+                                contentPadding = PaddingValues(top = 6.dp, bottom = 32.dp, start = 8.dp, end = 8.dp),
+                            )
+                        }
                     }
                     displayedVods.isEmpty() && !state.isSearching -> {
                         EmptyState(message = "未找到与 \"${state.keyword}\" 相关的结果")

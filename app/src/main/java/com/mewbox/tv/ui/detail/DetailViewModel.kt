@@ -207,9 +207,6 @@ class DetailViewModel @Inject constructor(
             } else if (shouldAutoPlay) {
                 _uiState.update { it.copy(isResolvingPlay = false, error = "未找到可播放的剧集") }
             }
-
-            // 后台静默抓取换源列表
-            triggerSearchChangeSources(vod.vodName)
         }
     }
 
@@ -256,6 +253,21 @@ class DetailViewModel @Inject constructor(
         )
     }
 
+    /**
+     * 长按影片名手动触发快速搜索换源列表
+     */
+    fun triggerChangeSourcesSearch() {
+        val vod = _uiState.value.vod ?: return
+        val vodName = vod.vodName.trim()
+        if (vodName.isBlank()) return
+        if (_uiState.value.isSearchingChangeSources) {
+            _uiState.update { it.copy(toastMessage = "正在检索换源中...") }
+            return
+        }
+        _uiState.update { it.copy(toastMessage = "正在检索《$vodName》换源...") }
+        triggerSearchChangeSources(vodName)
+    }
+
     private fun triggerSearchChangeSources(vodName: String) {
         sourceCoordinator.triggerSearchChangeSources(
             scope = viewModelScope,
@@ -267,8 +279,13 @@ class DetailViewModel @Inject constructor(
             onResultsUpdated = { results ->
                 _uiState.update { it.copy(changeSources = results) }
             },
-            onFinished = {
-                _uiState.update { it.copy(isSearchingChangeSources = false) }
+            onFinished = { count ->
+                _uiState.update {
+                    it.copy(
+                        isSearchingChangeSources = false,
+                        toastMessage = if (count > 0) "已检索到 $count 个可用换源" else "未检索到其他可用片源",
+                    )
+                }
             },
         )
     }

@@ -8,6 +8,7 @@ import com.mewbox.tv.bean.Site
 import com.mewbox.tv.bean.Vod
 import com.mewbox.tv.catvod.Spider
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -63,7 +64,21 @@ class NodeSpider(
         }
     }
 
-    private var initialized = false
+    @Volatile private var initialized = false
+
+    private suspend fun <T> runNodeIo(block: suspend () -> T): T = withContext(Dispatchers.IO) {
+        val thread = Thread.currentThread()
+        val handle = coroutineContext[Job]?.invokeOnCompletion { cause ->
+            if (cause != null) {
+                client.cancelCallsForThread(thread)
+            }
+        }
+        try {
+            block()
+        } finally {
+            handle?.dispose()
+        }
+    }
 
     private suspend fun ensureInit() {
         if (!initialized && site.ext.isNotBlank()) {
@@ -72,7 +87,7 @@ class NodeSpider(
         }
     }
 
-    override suspend fun init(ext: String) = withContext(Dispatchers.IO) {
+    override suspend fun init(ext: String) = runNodeIo {
         val body = buildJsonObject {
             val value = ext.ifEmpty { site.ext }
             put("ext", value)
@@ -82,14 +97,14 @@ class NodeSpider(
         initialized = true
     }
 
-    override suspend fun homeContent(filter: Boolean): Result = withContext(Dispatchers.IO) {
+    override suspend fun homeContent(filter: Boolean): Result = runNodeIo {
         ensureInit()
         val body = buildJsonObject { put("filter", filter) }
         val raw = addLegacyConfigActions(call("/home", body))
         tagResult(ResultParser.parseResult(raw))
     }
 
-    override suspend fun homeVideoContent(): Result = withContext(Dispatchers.IO) {
+    override suspend fun homeVideoContent(): Result = runNodeIo {
         ensureInit()
         var raw = client.postOptional(NodeRoute.append(site.api, "/homeVod"), EMPTY_BODY)
         if (raw.isEmpty()) {
@@ -103,7 +118,7 @@ class NodeSpider(
         pg: String,
         filter: Boolean,
         extend: Map<String, String>,
-    ): Result = withContext(Dispatchers.IO) {
+    ): Result = runNodeIo {
         ensureInit()
         val body = buildJsonObject {
             put("id", tid)
@@ -119,7 +134,7 @@ class NodeSpider(
         tagResult(ResultParser.parseResult(raw))
     }
 
-    override suspend fun detailContent(ids: List<String>): Result = withContext(Dispatchers.IO) {
+    override suspend fun detailContent(ids: List<String>): Result = runNodeIo {
         ensureInit()
         val body = buildJsonObject {
             put("id", ids.firstOrNull().orEmpty())
@@ -128,7 +143,7 @@ class NodeSpider(
         tagResult(ResultParser.parseResult(raw))
     }
 
-    override suspend fun searchContent(keyword: String, quick: Boolean, pg: String): Result = withContext(Dispatchers.IO) {
+    override suspend fun searchContent(keyword: String, quick: Boolean, pg: String): Result = runNodeIo {
         ensureInit()
         val body = buildJsonObject {
             put("wd", keyword)
@@ -139,7 +154,7 @@ class NodeSpider(
         tagResult(ResultParser.parseResult(raw))
     }
 
-    override suspend fun playerContent(flag: String, id: String, vipFlags: List<String>): Result = withContext(Dispatchers.IO) {
+    override suspend fun playerContent(flag: String, id: String, vipFlags: List<String>): Result = runNodeIo {
         ensureInit()
         client.setPlayInfo(flag, id)
         val body = buildJsonObject {
@@ -155,7 +170,7 @@ class NodeSpider(
         tagResult(ResultParser.parseResult(raw))
     }
 
-    override suspend fun action(action: String): Result = withContext(Dispatchers.IO) {
+    override suspend fun action(action: String): Result = runNodeIo {
         ensureInit()
         val body = buildJsonObject { put("action", action) }
         var raw: String? = client.postOrNull(NodeRoute.append(site.api, "/action"), body)
@@ -163,7 +178,7 @@ class NodeSpider(
             val detailBody = buildJsonObject { put("id", action) }
             raw = call("/detail", detailBody)
         }
-        if (raw.isNullOrEmpty()) return@withContext Result()
+        if (raw.isNullOrEmpty()) return@runNodeIo Result()
         try {
             val response = Json.parseToJsonElement(raw) as? JsonObject
             val web = response?.get("web") as? JsonObject

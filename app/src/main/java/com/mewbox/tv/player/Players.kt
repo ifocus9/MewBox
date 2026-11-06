@@ -417,8 +417,6 @@ class Players @Inject constructor(
         exoPlayer.release()
     }
 
-    private val trackNameProvider by lazy { androidx.media3.ui.DefaultTrackNameProvider(context.resources) }
-
     /**
      * 解析 ExoPlayer 当前所有的轨道组并映射为响应式 PlayerTrack 实体
      */
@@ -476,50 +474,8 @@ class Players @Inject constructor(
         val isSelected = group.isTrackSelected(trackIndex)
         val type = group.type
 
-        val name = when {
-            !format.label.isNullOrBlank() -> format.label!!
-            else -> {
-                val official = trackNameProvider.getTrackName(format)
-                if (official.isNotBlank()) {
-                    official
-                } else when (type) {
-                    C.TRACK_TYPE_TEXT -> format.language?.let { Locale.forLanguageTag(it).displayLanguage }.takeUnless { it.isNullOrBlank() } ?: "字幕 ${trackIndex + 1}"
-                    C.TRACK_TYPE_AUDIO -> "音轨 ${trackIndex + 1}"
-                    C.TRACK_TYPE_VIDEO -> if (format.width > 0 && format.height > 0) "${format.width}x${format.height}" else "视轨 ${trackIndex + 1}"
-                    else -> "轨道 ${trackIndex + 1}"
-                }
-            }
-        }
-
-        val details = when (type) {
-            C.TRACK_TYPE_VIDEO -> {
-                buildList {
-                    if (format.width > 0 && format.height > 0) add("${format.width}x${format.height}")
-                    if (format.bitrate > 0) add("${format.bitrate / 1000} kbps")
-                    if (format.frameRate > 0f) add("${format.frameRate.toInt()} fps")
-                    format.sampleMimeType?.substringAfterLast('/')?.uppercase()?.let { add(it) }
-                }.joinToString(" · ").takeIf { it.isNotBlank() }
-            }
-            C.TRACK_TYPE_AUDIO -> {
-                buildList {
-                    if (format.channelCount > 0) {
-                        when (format.channelCount) {
-                            1 -> add("单声道")
-                            2 -> add("立体声")
-                            6 -> add("5.1 声道")
-                            8 -> add("7.1 声道")
-                            else -> add("${format.channelCount} 声道")
-                        }
-                    }
-                    if (format.sampleRate > 0) add("${format.sampleRate / 1000} kHz")
-                    format.sampleMimeType?.substringAfterLast('/')?.uppercase()?.let { add(it) }
-                }.joinToString(" · ").takeIf { it.isNotBlank() }
-            }
-            C.TRACK_TYPE_TEXT -> {
-                format.sampleMimeType?.substringAfterLast('/')?.uppercase()
-            }
-            else -> null
-        }
+        val name = PlayerTrackFormatter.formatTrackTitle(format, type, trackIndex)
+        val details = PlayerTrackFormatter.formatTrackDetails(format, type)
 
         return PlayerTrack(
             id = "${type}_${groupIndex}_${trackIndex}",

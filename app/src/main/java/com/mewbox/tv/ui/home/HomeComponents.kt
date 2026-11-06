@@ -7,7 +7,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -23,7 +22,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -36,7 +34,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mewbox.tv.ui.components.glassSurface
-import com.mewbox.tv.ui.theme.LiquidGlassDefaults
 import kotlinx.coroutines.delay
 
 /** 参与首屏错落淡入的卡片数量（前两行），翻页加载的条目不再重复播放入场动画 */
@@ -108,53 +105,28 @@ fun HomeBackToTopButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val glassSupported = LiquidGlassDefaults.isSupported
-
     AnimatedVisibility(
         visible = visible,
         enter = fadeIn() + scaleIn(),
         exit = fadeOut() + scaleOut(),
         modifier = modifier,
     ) {
-        if (glassSupported) {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .glassSurface(
-                        shape = CircleShape,
-                        fallbackColor = Color(0xE6FFFFFF),
-                    )
-                    .clickable { onClick() },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Default.KeyboardArrowUp,
-                    contentDescription = "回到顶部",
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(24.dp),
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .glassSurface(
+                    shape = CircleShape,
+                    fallbackColor = Color(0xE6FFFFFF),
                 )
-            }
-        } else {
-            Surface(
-                onClick = onClick,
-                shape = CircleShape,
-                color = Color(0xE6FFFFFF),
-                shadowElevation = 6.dp,
-                border = BorderStroke(
-                    0.5.dp,
-                    Color(0x14000000),
-                ),
-                modifier = Modifier.size(40.dp),
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = Icons.Default.KeyboardArrowUp,
-                        contentDescription = "回到顶部",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(24.dp),
-                    )
-                }
-            }
+                .clickable { onClick() },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Default.KeyboardArrowUp,
+                contentDescription = "回到顶部",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(24.dp),
+            )
         }
     }
 }

@@ -26,6 +26,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.LocalOffer
 import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -164,11 +165,12 @@ internal fun LineCard(
 @Composable
 internal fun SourceSection(
     sources: List<Vod>,
+    isSearching: Boolean,
     currentSiteKey: String,
     onSelectSource: (Vod) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    if (sources.isEmpty()) return
+    if (sources.isEmpty() && !isSearching) return
 
     Column(
         modifier = modifier
@@ -188,34 +190,50 @@ internal fun SourceSection(
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.padding(start = 8.dp),
             )
+            if (isSearching) {
+                Spacer(Modifier.width(10.dp))
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = "检索中...",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            items(sources, key = { "${it.siteKey}_${it.vodId}" }) { item ->
-                val selected = item.siteKey == currentSiteKey
-                DetailItemCard(
-                    selected = selected,
-                    onClick = { onSelectSource(item) },
-                    modifier = Modifier.width(DetailItemWidth),
-                ) {
-                    Text(
-                        text = item.siteName.ifEmpty { item.siteKey },
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    if (item.vodRemarks.isNotEmpty()) {
+        if (sources.isNotEmpty()) {
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                items(sources, key = { "${it.siteKey}_${it.vodId}" }) { item ->
+                    val selected = item.siteKey == currentSiteKey
+                    DetailItemCard(
+                        selected = selected,
+                        onClick = { onSelectSource(item) },
+                        modifier = Modifier.width(DetailItemWidth),
+                    ) {
                         Text(
-                            text = item.vodRemarks,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            text = item.siteName.ifEmpty { item.siteKey },
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                             maxLines = 1,
-                            modifier = Modifier.padding(top = 4.dp),
+                            overflow = TextOverflow.Ellipsis,
                         )
+                        if (item.vodRemarks.isNotEmpty()) {
+                            Text(
+                                text = item.vodRemarks,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                modifier = Modifier.padding(top = 4.dp),
+                            )
+                        }
                     }
                 }
             }

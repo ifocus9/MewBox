@@ -197,8 +197,8 @@ class VodConfig @Inject constructor(
                 new.copy(
                     enabled = prev.enabled,
                     searchable = if (new.searchable != 0) prev.searchable.coerceAtLeast(1) else 0,
-                    quickSearch = if (!new.quickSearch) false else prev.quickSearch,
-                    changeable = if (!new.changeable) false else prev.changeable,
+                    quickSearch = new.quickSearch,
+                    changeable = new.changeable,
                     isHome = false,
                 )
             }

@@ -293,6 +293,7 @@ fun DetailScreen(
                             isEpisodeReversed = state.isEpisodeReversed,
                             isCompactEpisodeTitle = state.isCompactEpisodeTitle,
                             changeSources = state.changeSources,
+                            isSearchingChangeSources = state.isSearchingChangeSources,
                             currentSiteKey = state.currentSite?.key ?: "",
                             currentSourceName = state.currentSite?.name ?: "",
                             resumeEpisodeText = state.resumeEpisodeText,
@@ -308,6 +309,7 @@ fun DetailScreen(
                             },
                             onSelectFlag = { flag -> viewModel.selectFlag(flag) },
                             onSelectSource = { targetVod -> viewModel.changeSource(targetVod, shouldAutoPlay = false) },
+                            onTitleLongClick = { viewModel.triggerChangeSourcesSearch() },
                         )
 
                         // TMDB 手动重新匹配弹窗

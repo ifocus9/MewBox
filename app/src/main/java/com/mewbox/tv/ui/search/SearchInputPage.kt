@@ -55,7 +55,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kyant.capsule.ContinuousCapsule
 import com.mewbox.tv.ui.components.glassTopBarSurface
-import com.mewbox.tv.ui.theme.LiquidGlassDefaults
 import kotlinx.coroutines.delay
 
 /**
@@ -77,7 +76,6 @@ fun SearchInputPage(
     val keyboard = LocalSoftwareKeyboardController.current
     val focusRequester = remember { FocusRequester() }
     val scrollState = rememberScrollState()
-    val glassSupported = LiquidGlassDefaults.isSupported
 
     // 进入搜索页自动聚焦输入框并弹出软键盘（等待转场稳定及窗口获取焦点，对齐 FongMi 250ms 体验）
     LaunchedEffect(Unit) {
@@ -100,58 +98,34 @@ fun SearchInputPage(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // 返回箭头
-        if (glassSupported) {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .glassTopBarSurface(CircleShape, Color(0xFFF4F5F7))
-                    .clickable(onClick = {
-                        keyboard?.hide()
-                        onBack()
-                    }),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "返回",
-                    tint = Color(0xFF1F2329),
-                    modifier = Modifier.size(22.dp),
-                )
-            }
-            Spacer(modifier = Modifier.width(6.dp))
-        } else {
-            IconButton(
-                onClick = {
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .glassTopBarSurface(CircleShape, Color(0xFFF4F5F7))
+                .clickable(onClick = {
                     keyboard?.hide()
                     onBack()
-                },
-                modifier = Modifier.size(40.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "返回",
-                    tint = Color(0xFF1F2329),
-                )
-            }
+                }),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = "返回",
+                tint = Color(0xFF1F2329),
+                modifier = Modifier.size(22.dp),
+            )
         }
+        Spacer(modifier = Modifier.width(6.dp))
 
-        // 搜索输入胶囊（支持设备展示 AVBox 液态玻璃胶囊，不支持设备展示浅灰背景无边框输入栏）
+        // 搜索输入胶囊
         Row(
             modifier = Modifier
                 .weight(1f)
                 .height(38.dp)
-                .then(
-                    if (glassSupported) {
-                        Modifier.glassTopBarSurface(
-                            shape = ContinuousCapsule,
-                            fallbackColor = Color(0xFFF4F5F7),
-                            pressEffect = false,
-                        )
-                    } else {
-                        Modifier
-                            .clip(RoundedCornerShape(19.dp))
-                            .background(Color(0xFFF4F5F7))
-                    }
+                .glassTopBarSurface(
+                    shape = ContinuousCapsule,
+                    fallbackColor = Color(0xFFF4F5F7),
+                    pressEffect = false,
                 )
                 .padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -214,33 +188,19 @@ fun SearchInputPage(
         Spacer(modifier = Modifier.width(6.dp))
 
         // 指定站点按钮
-        if (glassSupported) {
-            Box(
-                modifier = Modifier
-                    .size(38.dp)
-                    .glassTopBarSurface(CircleShape, Color(0xFFF4F5F7))
-                    .clickable(onClick = onOpenSiteFilter),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Tune,
-                    contentDescription = "指定搜索站点",
-                    tint = if (state.searchTargetSiteKey != null) Color(0xFF217AF4) else Color(0xFF555555),
-                    modifier = Modifier.size(22.dp),
-                )
-            }
-        } else {
-            IconButton(
-                onClick = onOpenSiteFilter,
-                modifier = Modifier.size(38.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Tune,
-                    contentDescription = "指定搜索站点",
-                    tint = if (state.searchTargetSiteKey != null) Color(0xFF217AF4) else Color(0xFF555555),
-                    modifier = Modifier.size(22.dp),
-                )
-            }
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .glassTopBarSurface(CircleShape, Color(0xFFF4F5F7))
+                .clickable(onClick = onOpenSiteFilter),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Default.Tune,
+                contentDescription = "指定搜索站点",
+                tint = if (state.searchTargetSiteKey != null) Color(0xFF217AF4) else Color(0xFF555555),
+                modifier = Modifier.size(22.dp),
+            )
         }
     }
 

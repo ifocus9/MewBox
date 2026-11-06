@@ -105,7 +105,7 @@ class SiteRepository @Inject constructor(
     /**
      * 多源并发流式搜索：
      * 1. 筛选出所有 enabled && searchable 且 router.isSupported 的站点
-     * 2. 优先调度支持快搜与秒播站点（如 [秒] 标记），确保首屏结果毫秒级呈现（秒出结果）
+     * 2. 优先调度支持快搜与网盘站点（如 [盘] 标记），确保首屏结果毫秒级呈现（秒出结果）
      * 3. 提升并发许可（HTTP 24 / 共享运行时 16），避免多源排队
      * 4. 单源超时对齐 FongMi 30 秒（TIMEOUT_SEARCH = 30_000L），确保网盘与耗时源完整搜出，不丢结果
      */
@@ -119,13 +119,13 @@ class SiteRepository @Inject constructor(
 
         // 优先调度支持快搜或标记为秒播的站点，确保首屏结果毫秒级呈现
         val sortedSites = sites.sortedWith(
-            compareByDescending<Site> { it.name.contains("秒") }
+             compareByDescending<Site> { it.name.contains("盘") } // 盘源（带 [盘]、网盘）拥有绝对第一优先级
                 .thenByDescending { it.quickSearch }
                 .thenBy { it.priority }
         )
 
         val httpPermit = Semaphore(24)
-        val sharedPermit = Semaphore(16)
+        val sharedPermit = Semaphore(8)
         withContext(Dispatchers.IO) {
             sortedSites.map { site ->
                 async {
@@ -151,7 +151,7 @@ class SiteRepository @Inject constructor(
      * 针对指定片名的快速检索（换源 / 豆瓣跨源推荐播放）：
      * 1. 筛选 enabled && changeable && router.isSupported 的源
      * 2. quick = true 进行轻量快搜，按引擎类型分组限流（HTTP 16 / 共享运行时 8）
-     * 3. 单源超时提升至 15 秒，严格根据片名核心词匹配并流式 emit
+     * 3. 单源超时提升至 15 秒，流式 emit 检索结果
      */
     fun quickSearch(vodName: String): Flow<Vod> = channelFlow {
         val cleanTarget = vodName.trim()
@@ -171,9 +171,7 @@ class SiteRepository @Inject constructor(
                                 router.spider(site).searchContent(keyword = cleanTarget, quick = true, pg = "1")
                             }
                             result?.list?.forEach { vod ->
-                                if (isNameMatched(vod.vodName, cleanTarget)) {
-                                    send(vod)
-                                }
+                                send(vod)
                             }
                         } catch (e: Exception) {
                             Timber.w(e, "快搜换源失败: ${site.name}")
@@ -182,12 +180,6 @@ class SiteRepository @Inject constructor(
                 }
             }.awaitAll()
         }
-    }
-
-    private fun isNameMatched(name: String, target: String): Boolean {
-        val n1 = name.replace(" ", "").lowercase()
-        val n2 = target.replace(" ", "").lowercase()
-        return n1.contains(n2) || n2.contains(n1)
     }
 
     fun observeHistories(configUrl: String? = null): Flow<List<History>> =

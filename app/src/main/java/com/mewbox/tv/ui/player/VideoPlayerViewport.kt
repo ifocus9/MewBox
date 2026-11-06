@@ -3,6 +3,7 @@ package com.mewbox.tv.ui.player
 import android.app.Activity
 import android.content.Context
 import android.media.AudioManager
+import android.util.TypedValue
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
@@ -30,7 +31,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
+import androidx.media3.ui.SubtitleView
 import coil3.compose.AsyncImage
 import com.mewbox.tv.bean.Vod
 import com.mewbox.tv.player.PlaybackState
@@ -164,6 +167,8 @@ fun VideoPlayerViewport(
         modifier = modifier.background(Color.Black),
         contentAlignment = Alignment.Center,
     ) {
+        val isLandscape = maxWidth > maxHeight
+
         // 1. 底层 PlayerView（禁止使用 Media3 自带控制器，由上方 Compose 层统一绘制交互控制栏）
         AndroidView(
             factory = { ctx ->
@@ -177,11 +182,40 @@ fun VideoPlayerViewport(
                     player = players.exoPlayer
                     resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                     keepScreenOn = true
+
+                    // 配置字幕样式：白字 + 单字黑色描边 + 背景透明（对齐 MewPlayer，消除整块黑色背景）
+                    subtitleView?.apply {
+                        setStyle(
+                            CaptionStyleCompat(
+                                android.graphics.Color.WHITE,
+                                android.graphics.Color.TRANSPARENT,
+                                android.graphics.Color.TRANSPARENT,
+                                CaptionStyleCompat.EDGE_TYPE_OUTLINE,
+                                android.graphics.Color.BLACK,
+                                null,
+                            )
+                        )
+                        setApplyEmbeddedStyles(true)
+                        setApplyEmbeddedFontSizes(false)
+                        // 动态字号策略：横屏按高度 5.33% 自适应适配各类屏幕；竖屏使用固定 17sp 避免因高纵横比导致字幕被拉大两倍
+                        if (isLandscape) {
+                            setFractionalTextSize(SubtitleView.DEFAULT_TEXT_SIZE_FRACTION)
+                        } else {
+                            setFixedTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
+                        }
+                    }
                 }
             },
             update = { pv ->
                 pv.resizeMode = playerState.resizeMode
                 pv.keepScreenOn = shouldKeepScreenOn
+                pv.subtitleView?.let { subView ->
+                    if (isLandscape) {
+                        subView.setFractionalTextSize(SubtitleView.DEFAULT_TEXT_SIZE_FRACTION)
+                    } else {
+                        subView.setFixedTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
+                    }
+                }
             },
             onRelease = { pv ->
                 pv.player = null
@@ -332,6 +366,7 @@ fun VideoPlayerViewport(
             showCenterControls = !isLoading && !isError,
             vod = vod,
             playerState = playerState,
+            isLandscape = isLandscape,
             currentEpisodeName = currentEpisodeName,
             hasPrevEpisode = hasPrevEpisode,
             hasNextEpisode = hasNextEpisode,

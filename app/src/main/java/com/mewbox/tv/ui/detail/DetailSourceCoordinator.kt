@@ -62,7 +62,7 @@ class DetailSourceCoordinator @Inject constructor(
     }
 
     /**
-     * 后台静默抓取其它站同名资源，供换源弹窗实时消费
+     * 后台抓取其它站同名资源，供换源列表实时消费
      */
     fun triggerSearchChangeSources(
         scope: CoroutineScope,
@@ -70,7 +70,7 @@ class DetailSourceCoordinator @Inject constructor(
         currentSiteKey: String,
         onStart: () -> Unit,
         onResultsUpdated: (List<Vod>) -> Unit,
-        onFinished: () -> Unit,
+        onFinished: (resultCount: Int) -> Unit,
     ) {
         if (vodName.isBlank()) return
         changeSourceJob?.cancel()
@@ -83,7 +83,7 @@ class DetailSourceCoordinator @Inject constructor(
                     onResultsUpdated(resultList.toList())
                 }
             }
-            onFinished()
+            onFinished(resultList.size)
         }
     }
 

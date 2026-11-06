@@ -45,6 +45,7 @@ fun DetailContent(
     isEpisodeReversed: Boolean,
     isCompactEpisodeTitle: Boolean,
     changeSources: List<Vod>,
+    isSearchingChangeSources: Boolean = false,
     currentSiteKey: String,
     currentSourceName: String,
     resumeEpisodeText: String?,
@@ -54,6 +55,7 @@ fun DetailContent(
     onSelectEpisode: (Episode) -> Unit,
     onSelectFlag: (Flag) -> Unit,
     onSelectSource: (Vod) -> Unit,
+    onTitleLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
@@ -72,6 +74,7 @@ fun DetailContent(
                 tmdbImageBase = tmdbImageBase,
                 resumeEpisodeText = resumeEpisodeText,
                 onPlay = onPlay,
+                onTitleLongClick = onTitleLongClick,
             )
         }
 
@@ -140,11 +143,12 @@ fun DetailContent(
             }
         }
 
-        // 4. 换源栏（展示多站同名源）
-        if (changeSources.isNotEmpty()) {
+        // 4. 换源栏（展示多站同名源或正在检索换源）
+        if (changeSources.isNotEmpty() || isSearchingChangeSources) {
             item(key = "sources") {
                 SourceSection(
                     sources = changeSources,
+                    isSearching = isSearchingChangeSources,
                     currentSiteKey = currentSiteKey,
                     onSelectSource = onSelectSource,
                 )

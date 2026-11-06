@@ -1,5 +1,11 @@
 package com.mewbox.tv.ui.history
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -23,7 +29,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -39,13 +47,16 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -59,9 +70,7 @@ import com.mewbox.tv.ui.components.EmptyState
 import com.mewbox.tv.ui.components.LoadingState
 import com.mewbox.tv.ui.components.PosterPlaceholder
 import com.mewbox.tv.ui.components.glassTopBarSurface
-import com.mewbox.tv.ui.theme.LiquidGlassDefaults
 import com.mewbox.tv.ui.theme.OrangeBadge
-import androidx.compose.ui.graphics.Color
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -72,35 +81,68 @@ fun HistoryScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var showClearDialog by remember { mutableStateOf(false) }
-    // 长按卡片后待确认删除的记录
-    var pendingDelete by remember { mutableStateOf<History?>(null) }
-    val glassSupported = LiquidGlassDefaults.isSupported
+    var isDeleteMode by rememberSaveable { mutableStateOf(false) }
+
+    // 当列表为空时自动退出删除模式
+    LaunchedEffect(state.items.isEmpty()) {
+        if (state.items.isEmpty()) {
+            isDeleteMode = false
+        }
+    }
+
+    // 处于删除模式时拦截系统返回键，按返回键退出删除模式恢复默认状态
+    BackHandler(enabled = isDeleteMode) {
+        isDeleteMode = false
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("追剧") },
+                title = { Text(if (isDeleteMode) "管理记录" else "追剧") },
+                navigationIcon = {
+                    if (isDeleteMode) {
+                        Box(
+                            modifier = Modifier
+                                .padding(start = 12.dp)
+                                .size(40.dp)
+                                .glassTopBarSurface(CircleShape, MaterialTheme.colorScheme.surfaceBright)
+                                .clickable { isDeleteMode = false },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "退出管理",
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+                    }
+                },
                 actions = {
-                    if (state.items.isNotEmpty()) {
-                        if (glassSupported) {
-                            Box(
-                                modifier = Modifier
-                                    .padding(end = 8.dp)
-                                    .size(40.dp)
-                                    .glassTopBarSurface(CircleShape, MaterialTheme.colorScheme.surfaceBright)
-                                    .clickable { showClearDialog = true },
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Delete,
-                                    contentDescription = "清空历史",
-                                    modifier = Modifier.size(20.dp),
-                                )
-                            }
-                        } else {
-                            IconButton(onClick = { showClearDialog = true }) {
-                                Icon(imageVector = Icons.Default.Delete, contentDescription = "清空历史")
-                            }
+                    if (isDeleteMode) {
+                        TextButton(
+                            onClick = { isDeleteMode = false },
+                            modifier = Modifier.padding(end = 8.dp),
+                        ) {
+                            Text(
+                                text = "完成",
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    } else if (state.items.isNotEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .padding(end = 8.dp)
+                                .size(40.dp)
+                                .glassTopBarSurface(CircleShape, MaterialTheme.colorScheme.surfaceBright)
+                                .clickable { showClearDialog = true },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Delete,
+                                contentDescription = "清空历史",
+                                modifier = Modifier.size(20.dp),
+                            )
                         }
                     }
                 },
@@ -133,10 +175,23 @@ fun HistoryScreen(
                         items(state.items, key = { it.key }) { history ->
                             HistoryItemCard(
                                 history = history,
+                                isDeleteMode = isDeleteMode,
                                 onClick = {
-                                    onNavigateToPlay(history.siteKey, history.vodId, history.vodName, history.vodPic)
+                                    if (isDeleteMode) {
+                                        viewModel.deleteHistory(history.key)
+                                    } else {
+                                        onNavigateToPlay(history.siteKey, history.vodId, history.vodName, history.vodPic)
+                                    }
                                 },
-                                onLongClick = { pendingDelete = history },
+                                onLongClick = {
+                                    if (!isDeleteMode) {
+                                        isDeleteMode = true
+                                    }
+                                },
+                                onDeleteClick = {
+                                    viewModel.deleteHistory(history.key)
+                                },
+                                modifier = Modifier.animateItem(),
                             )
                         }
                     }
@@ -168,46 +223,25 @@ fun HistoryScreen(
             },
         )
     }
-
-    // 单条记录删除确认弹窗
-    pendingDelete?.let { target ->
-        AlertDialog(
-            onDismissRequest = { pendingDelete = null },
-            title = { Text("删除记录") },
-            text = { Text("确定要删除《${target.vodName}》的观看记录吗？") },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        viewModel.deleteHistory(target.key)
-                        pendingDelete = null
-                    },
-                ) {
-                    Text("删除", color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingDelete = null }) {
-                    Text("取消")
-                }
-            },
-        )
-    }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun HistoryItemCard(
     history: History,
+    isDeleteMode: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
+    onDeleteClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Card(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .combinedClickable(
-                onClickLabel = "继续播放",
-                onLongClickLabel = "删除记录",
-                onLongClick = onLongClick,
+                onClickLabel = if (isDeleteMode) "删除记录" else "继续播放",
+                onLongClickLabel = if (isDeleteMode) null else "管理记录",
+                onLongClick = if (isDeleteMode) null else onLongClick,
                 onClick = onClick,
             ),
         shape = RoundedCornerShape(12.dp),
@@ -232,7 +266,6 @@ private fun HistoryItemCard(
                 var loadFailed by remember(history.vodPic) { mutableStateOf(history.vodPic.isBlank()) }
                 if (loadFailed) {
                     PosterPlaceholder(
-                        title = history.vodName,
                         isHero = false,
                         modifier = Modifier.fillMaxSize(),
                     )
@@ -322,6 +355,30 @@ private fun HistoryItemCard(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary,
                 )
+            }
+
+            // 删除模式下的删除按钮
+            AnimatedVisibility(
+                visible = isDeleteMode,
+                enter = fadeIn() + expandHorizontally(),
+                exit = fadeOut() + shrinkHorizontally(),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .padding(start = 12.dp)
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.8f))
+                        .clickable(onClick = onDeleteClick),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.DeleteOutline,
+                        contentDescription = "删除",
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
             }
         }
     }

@@ -12,17 +12,23 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -32,8 +38,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.pager.HorizontalPager
@@ -81,6 +89,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import androidx.navigation.navDeepLink
+import com.kyant.backdrop.backdrops.LayerBackdrop
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.mewbox.tv.bean.Vod
@@ -156,6 +165,13 @@ class MainActivity : ComponentActivity() {
             if (result.msg.isNotBlank()) {
                 Toast.makeText(this@MainActivity, result.msg, Toast.LENGTH_SHORT).show()
             }
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        if (isFinishing) {
+            nodeRuntime.clear()
         }
     }
 }
@@ -462,10 +478,6 @@ private fun MainTabScreen(
         { pagerState.isScrollInProgress }
     }
 
-    val glassTabs = remember {
-        Tab.entries.map { tab -> GlassTabItem(icon = tab.icon, label = tab.label) }
-    }
-
     val selectTab: (Int) -> Unit = { index ->
         scope.launch {
             pagerState.animateScrollToPage(index)
@@ -522,113 +534,184 @@ private fun MainTabScreen(
                 )
             }
 
-            // 悬浮底部导航栏（支持设备展示 AVBox 液态玻璃效果，不支持设备降级展示圆角卡片效果）
-            if (liquidGlassEnabled) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .widthIn(max = 320.dp)
-                        .fillMaxWidth()
-                        .windowInsetsPadding(WindowInsets.navigationBars)
-                        .padding(horizontal = 16.dp)
-                        .padding(bottom = NavMetrics.MARGIN_DP.dp),
-                ) {
-                    FloatingNavBar(
-                        backdrop = liquidBackdrop,
-                        axis = NavAxis.Horizontal,
-                        selectedTabIndex = { pagerState.targetPage },
-                        onTabSelected = selectTab,
-                        tabs = glassTabs,
-                        config = liquidGlassConfig,
-                        interactive = { true },
-                    )
-                }
-            } else {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .windowInsetsPadding(WindowInsets.navigationBars),
-                ) {
-                    MewFloatingBottomBar(
-                        tabs = Tab.entries,
-                        selectedTabIndex = pagerState.targetPage,
-                        onSelectTab = { tab -> selectTab(Tab.entries.indexOf(tab)) },
-                    )
-                }
-            }
+            // 悬浮底部导航栏（自适应：支持设备展示 AVBox 真液态玻璃效果，雷神模拟器等展示方案 A 拟态流光胶囊）
+            AdaptiveFloatingNavBar(
+                liquidGlassEnabled = liquidGlassEnabled,
+                liquidBackdrop = liquidBackdrop,
+                tabs = Tab.entries,
+                selectedTabIndex = pagerState.targetPage,
+                onSelectTab = selectTab,
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
         }
     }
 
 /**
- * MewPlayer 风格悬浮导航胶囊组件（严格对齐 activity_home.xml navCard: 28dp 圆角半透明悬浮卡片 + 4 个 Tab）
+ * 自适应悬浮底部导航栏：
+ * - Android 12+ 真机：运行底层 :libs:backdrop 真实液态玻璃与折射
+ * - Android 9 模拟器 / 低版本：运行方案 A 拟态玻璃（双色菲涅尔渐变描边 + 弹性滑动胶囊指示器）
+ */
+@Composable
+private fun AdaptiveFloatingNavBar(
+    liquidGlassEnabled: Boolean,
+    liquidBackdrop: LayerBackdrop?,
+    tabs: List<Tab>,
+    selectedTabIndex: Int,
+    onSelectTab: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (liquidGlassEnabled && liquidBackdrop != null) {
+        val glassTabs = remember(tabs) {
+            tabs.map { tab -> GlassTabItem(icon = tab.icon, label = tab.label) }
+        }
+        Box(
+            modifier = modifier
+                .widthIn(max = 320.dp)
+                .fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.navigationBars)
+                .padding(horizontal = 16.dp)
+                .padding(bottom = NavMetrics.MARGIN_DP.dp),
+        ) {
+            FloatingNavBar(
+                backdrop = liquidBackdrop,
+                axis = NavAxis.Horizontal,
+                selectedTabIndex = { selectedTabIndex },
+                onTabSelected = onSelectTab,
+                tabs = glassTabs,
+                config = LiquidGlassDefaults.Config,
+                interactive = { true },
+            )
+        }
+    } else {
+        Box(
+            modifier = modifier
+                .windowInsetsPadding(WindowInsets.navigationBars),
+        ) {
+            MewFloatingBottomBar(
+                tabs = tabs,
+                selectedTabIndex = selectedTabIndex,
+                onSelectTab = onSelectTab,
+            )
+        }
+    }
+}
+
+/**
+ * 方案 A 拟态玻璃悬浮导航胶囊组件（全版本通用，雷神模拟器 Android 9 与低版本专属高质感呈现）
+ * - 28dp 圆角半透明亚克力卡片
+ * - 双色菲涅尔顶部高光边缘描边 + 微弱白色漫反射
+ * - 选中的 Tab 胶囊滑块采用 Spring 阻尼弹性位移，模拟流体质感
  */
 @Composable
 private fun MewFloatingBottomBar(
     tabs: List<Tab>,
     selectedTabIndex: Int,
-    onSelectTab: (Tab) -> Unit,
+    onSelectTab: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val shape = RoundedCornerShape(28.dp)
     Surface(
-        shape = RoundedCornerShape(28.dp),
-        color = Color(0xE6FFFFFF),
-        shadowElevation = 6.dp,
+        shape = shape,
+        color = Color.White.copy(alpha = 0.85f),
+        shadowElevation = 8.dp,
         border = BorderStroke(
-            0.5.dp,
-            Color(0x14000000),
+            0.75.dp,
+            Brush.verticalGradient(
+                listOf(
+                    Color.White.copy(alpha = 0.85f),
+                    Color.White.copy(alpha = 0.2f),
+                ),
+            ),
         ),
         modifier = modifier
             .padding(horizontal = 24.dp, vertical = 18.dp)
             .height(56.dp)
             .widthIn(max = 280.dp),
     ) {
-        Row(
-            modifier = Modifier.padding(4.dp),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically,
+        Box(
+            modifier = Modifier
+                .background(
+                    Brush.verticalGradient(
+                        0f to Color.White.copy(alpha = 0.4f),
+                        0.5f to Color.Transparent,
+                    ),
+                )
+                .padding(4.dp),
         ) {
-            tabs.forEachIndexed { index, tab ->
-                val isSelected = selectedTabIndex == index
+            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                val tabWidth = maxWidth / tabs.size
+                val indicatorOffset by animateDpAsState(
+                    targetValue = tabWidth * selectedTabIndex,
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioLowBouncy,
+                        stiffness = Spring.StiffnessMediumLow,
+                    ),
+                    label = "TabIndicatorOffset",
+                )
+
+                // 拟态流体滑动胶囊指示器
                 Box(
                     modifier = Modifier
-                        .weight(1f)
+                        .offset(x = indicatorOffset)
+                        .width(tabWidth)
                         .fillMaxHeight()
-                        .clip(RoundedCornerShape(24.dp))
-                        .background(
-                            if (isSelected) {
-                                Color(0x12000000)
-                            } else Color.Transparent
-                        )
-                        .clickable { onSelectTab(tab) },
-                    contentAlignment = Alignment.Center,
+                        .padding(2.dp)
+                        .clip(RoundedCornerShape(22.dp))
+                        .background(Color(0x14000000))
+                        .border(
+                            width = 0.5.dp,
+                            color = Color.White.copy(alpha = 0.6f),
+                            shape = RoundedCornerShape(22.dp),
+                        ),
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
-                    ) {
-                        Icon(
-                            imageVector = tab.icon,
-                            contentDescription = tab.label,
-                            tint = if (isSelected) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                Color(0xFF1A1A1A)
-                            },
-                            modifier = Modifier.size(24.dp),
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = tab.label,
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontSize = 11.sp,
-                                fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
-                            ),
-                            color = if (isSelected) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                Color(0xFF1A1A1A)
-                            },
-                        )
+                    tabs.forEachIndexed { index, tab ->
+                        val isSelected = selectedTabIndex == index
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .clip(RoundedCornerShape(22.dp))
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                ) { onSelectTab(index) },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center,
+                            ) {
+                                Icon(
+                                    imageVector = tab.icon,
+                                    contentDescription = tab.label,
+                                    tint = if (isSelected) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        Color(0xFF1A1A1A)
+                                    },
+                                    modifier = Modifier.size(24.dp),
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = tab.label,
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontSize = 11.sp,
+                                        fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
+                                    ),
+                                    color = if (isSelected) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        Color(0xFF1A1A1A)
+                                    },
+                                )
+                            }
+                        }
                     }
                 }
             }
