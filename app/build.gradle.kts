@@ -12,8 +12,8 @@ plugins {
 // ==========================================
 // 个人自用极简版本控制
 // ==========================================
-val appVersionCode = 3
-val appVersionName = "1.0.2"
+val appVersionCode = 4
+val appVersionName = "1.0.3"
 
 // 构建时间戳（例如 202611041147）
 val buildTimestamp = LocalDateTime.now()
