@@ -5,27 +5,20 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.WindowInsetsSides
-import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -40,10 +33,7 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalMinimumInteractiveComponentSize
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -53,7 +43,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -68,19 +57,10 @@ import androidx.compose.ui.unit.sp
 import com.mewbox.tv.bean.Vod
 import com.mewbox.tv.player.PlayerState
 import com.mewbox.tv.player.Players
-
-private val QuickActionButtonPadding = PaddingValues(horizontal = 10.dp, vertical = 3.dp)
-
-/**
- * 底部控制栏整体下移量。
- * 底栏原本以 BottomCenter 对齐，内部 bottom padding 为 insets.bottom + 4.dp，
- * 这里用 offset 把进度条与快捷工具栏一起往下推，不改动内部间距与安全区左右边距。
- * 注意：该值不宜超过 insets.bottom + 4.dp，否则底部快捷按钮会贴底甚至被裁切 / 误触系统手势。
- */
-private val PlayerBottomBarDownOffset = 12.dp
+import kotlinx.coroutines.delay
 
 /**
- * 屏幕锁定时的单解锁按钮浮层
+ * 屏幕锁定时的解锁按钮浮层
  */
 @Composable
 internal fun BoxScope.PlayerLockedOverlay(
@@ -96,16 +76,18 @@ internal fun BoxScope.PlayerLockedOverlay(
             .align(Alignment.CenterEnd)
             .padding(end = insets.horizontal + 16.dp),
     ) {
-        IconButton(
-            onClick = onUnlock,
-            modifier = Modifier.size(48.dp),
-        ) {
-            Icon(
-                imageVector = Icons.Default.Lock,
-                contentDescription = "解锁屏幕",
-                tint = Color.White,
-                modifier = Modifier.size(26.dp),
-            )
+        CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides Dp.Unspecified) {
+            IconButton(
+                onClick = onUnlock,
+                modifier = Modifier.size(40.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Lock,
+                    contentDescription = "解锁屏幕",
+                    tint = Color.White,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
         }
     }
 }
@@ -144,25 +126,51 @@ internal fun PlayerControlsOverlay(
     externalSeekPosition: Long? = null,
 ) {
     val insets = rememberPlayerSafeInsets()
+    // 对齐 MewPlayer：当前线路剧集数 < 2 时隐藏「上一集 / 下一集 / 选集」，电影即走这条规则（一条播放地址 = 1 集）。
+    // hasPrevEpisode / hasNextEpisode 由 DetailEpisodeNav 按当前线路 + 正倒序算出，
+    // 两者皆 false ⟺ 该线路只有一集（或无剧集），与选集抽屉的数据源一致，无需额外透传剧集列表。
+    val showEpisodeControls = hasPrevEpisode || hasNextEpisode
     AnimatedVisibility(
         visible = visible,
         enter = fadeIn(),
         exit = fadeOut(),
         modifier = Modifier.fillMaxSize(),
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        listOf(
-                            Color(0x99000000),
-                            Color.Transparent,
-                            Color(0xBB000000),
+        Box(modifier = Modifier.fillMaxSize()) {
+            // 顶部渐变遮罩
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.TopCenter)
+                    .height(90.dp + insets.top)
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                Color(0xCC000000),
+                                Color(0x66000000),
+                                Color.Transparent,
+                            )
                         )
-                    )
-                ),
-        ) {
+                    ),
+            )
+
+            // 底部渐变遮罩
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.BottomCenter)
+                    .height(90.dp + insets.bottom)
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                Color.Transparent,
+                                Color(0x66000000),
+                                Color(0xCC000000),
+                            )
+                        )
+                    ),
+            )
+
             // A. 顶部栏 (Top Bar)
             PlayerTopBar(
                 vodName = vod.vodName,
@@ -180,6 +188,7 @@ internal fun PlayerControlsOverlay(
             if (showCenterControls) {
                 PlayerCenterControls(
                     isPlaying = playerState.isPlaying,
+                    showEpisodeControls = showEpisodeControls,
                     hasPrevEpisode = hasPrevEpisode,
                     hasNextEpisode = hasNextEpisode,
                     onPlayPrevious = onPlayPrevious,
@@ -190,21 +199,19 @@ internal fun PlayerControlsOverlay(
             }
 
             // C. 右侧悬浮控制栏（屏幕锁）
-            Column(
-                modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .padding(end = insets.horizontal + 16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
+            CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides Dp.Unspecified) {
                 IconButton(
                     onClick = onLockScreen,
-                    modifier = Modifier.size(48.dp),
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(end = insets.horizontal + 16.dp)
+                        .size(40.dp),
                 ) {
                     Icon(
                         imageVector = Icons.Default.LockOpen,
                         contentDescription = "锁定屏幕",
                         tint = Color.White,
-                        modifier = Modifier.size(26.dp),
+                        modifier = Modifier.size(24.dp),
                     )
                 }
             }
@@ -215,6 +222,7 @@ internal fun PlayerControlsOverlay(
                 currentPosition = playerState.currentPosition,
                 bufferedPosition = playerState.bufferedPosition,
                 isLandscape = isLandscape,
+                showEpisodeControls = showEpisodeControls,
                 externalSeekPosition = externalSeekPosition,
                 onSeekTo = onSeekTo,
                 onRefreshPlayback = onRefreshPlayback,
@@ -229,14 +237,15 @@ internal fun PlayerControlsOverlay(
                 onSetEnding = onSetEnding,
                 onResetEnding = onResetEnding,
                 insets = insets,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .offset(y = PlayerBottomBarDownOffset),
+                modifier = Modifier.align(Alignment.BottomCenter),
             )
         }
     }
 }
 
+/**
+ * 顶部导航与状态栏
+ */
 @Composable
 private fun PlayerTopBar(
     vodName: String,
@@ -254,28 +263,28 @@ private fun PlayerTopBar(
             modifier = modifier
                 .fillMaxWidth()
                 .padding(
-                    start = insets.horizontal + 8.dp,
-                    end = insets.horizontal + 8.dp,
+                    start = insets.horizontal + 10.dp,
+                    end = insets.horizontal + 10.dp,
                     top = insets.top + 6.dp,
                     bottom = 6.dp,
                 ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if(isLandscape){
+            if (isLandscape) {
                 IconButton(
                     onClick = onBack,
-                    modifier = Modifier.size(48.dp),
+                    modifier = Modifier.size(40.dp),
                 ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                         contentDescription = "返回",
                         tint = Color.White,
-                        modifier = Modifier.size(26.dp),
+                        modifier = Modifier.size(24.dp),
                     )
                 }
-
                 Spacer(modifier = Modifier.width(6.dp))
             }
+
             Column(
                 modifier = Modifier
                     .weight(1f)
@@ -290,8 +299,9 @@ private fun PlayerTopBar(
                 Text(
                     text = titleText,
                     color = Color.White,
-                    style = MaterialTheme.typography.titleMedium.copy(
+                    style = TextStyle(
                         fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
                     ),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -300,10 +310,10 @@ private fun PlayerTopBar(
                 if (videoWidth > 0 && videoHeight > 0) {
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = "$videoWidth x $videoHeight",
-                        color = Color.White.copy(alpha = 0.85f),
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            fontSize = 13.sp,
+                        text = "${videoWidth}×${videoHeight}",
+                        color = Color.White.copy(alpha = 0.72f),
+                        style = TextStyle(
+                            fontSize = 12.sp,
                             fontWeight = FontWeight.Normal,
                         ),
                         maxLines = 1,
@@ -313,30 +323,32 @@ private fun PlayerTopBar(
 
             IconButton(
                 onClick = onShowMediaInfo,
-                modifier = Modifier.size(48.dp),
+                modifier = Modifier.size(40.dp),
             ) {
                 Icon(
                     imageVector = Icons.Outlined.Info,
                     contentDescription = "媒体信息",
                     tint = Color.White,
-                    modifier = Modifier.size(24.dp),
+                    modifier = Modifier.size(22.dp),
                 )
             }
 
-            Spacer(modifier = Modifier.width(4.dp))
+            Spacer(modifier = Modifier.width(6.dp))
 
             PlayerBatteryTimeIndicator(
-                modifier = Modifier.size(48.dp),
+                modifier = Modifier.height(40.dp),
             )
-
-            Spacer(modifier = Modifier.width(4.dp))
         }
     }
 }
 
+/**
+ * 中心主播放控制按钮组（上一集、播放/暂停、下一集）
+ */
 @Composable
 private fun PlayerCenterControls(
     isPlaying: Boolean,
+    showEpisodeControls: Boolean,
     hasPrevEpisode: Boolean,
     hasNextEpisode: Boolean,
     onPlayPrevious: () -> Unit,
@@ -348,61 +360,77 @@ private fun PlayerCenterControls(
         Row(
             modifier = modifier,
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(24.dp),
+            horizontalArrangement = Arrangement.spacedBy(28.dp),
         ) {
-            IconButton(
-                onClick = onPlayPrevious,
-                enabled = hasPrevEpisode,
-                modifier = Modifier
-                    .size(42.dp)
-                    .background(if (hasPrevEpisode) Color(0x55000000) else Color(0x22000000), CircleShape),
-            ) {
-                Icon(
-                    imageVector = Icons.Default.SkipPrevious,
-                    contentDescription = "上一集",
-                    tint = if (hasPrevEpisode) Color.White else Color.White.copy(alpha = 0.3f),
-                    modifier = Modifier.size(20.dp),
-                )
+            // 单集（含电影）时整组隐藏上一集 / 下一集，只保留播放 / 暂停
+            if (showEpisodeControls) {
+                // 上一集
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(if (hasPrevEpisode) Color.Black.copy(alpha = 0.35f) else Color.Black.copy(alpha = 0.15f))
+                        .then(if (hasPrevEpisode) Modifier.clickable(onClick = onPlayPrevious) else Modifier),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.SkipPrevious,
+                        contentDescription = "上一集",
+                        tint = if (hasPrevEpisode) Color.White else Color.White.copy(alpha = 0.30f),
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
             }
 
-            IconButton(
-                onClick = onPlayPauseToggle,
+            // 播放 / 暂停
+            Box(
                 modifier = Modifier
-                    .size(50.dp)
-                    .background(Color(0x77000000), CircleShape),
+                    .size(56.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.50f))
+                    .clickable(onClick = onPlayPauseToggle),
+                contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    contentDescription = "播放/暂停",
+                    contentDescription = if (isPlaying) "暂停" else "播放",
                     tint = Color.White,
-                    modifier = Modifier.size(30.dp),
+                    modifier = Modifier.size(32.dp),
                 )
             }
 
-            IconButton(
-                onClick = onPlayNext,
-                enabled = hasNextEpisode,
-                modifier = Modifier
-                    .size(42.dp)
-                    .background(if (hasNextEpisode) Color(0x55000000) else Color(0x22000000), CircleShape),
-            ) {
-                Icon(
-                    imageVector = Icons.Default.SkipNext,
-                    contentDescription = "下一集",
-                    tint = if (hasNextEpisode) Color.White else Color.White.copy(alpha = 0.3f),
-                    modifier = Modifier.size(20.dp),
-                )
+            if (showEpisodeControls) {
+                // 下一集
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(if (hasNextEpisode) Color.Black.copy(alpha = 0.35f) else Color.Black.copy(alpha = 0.15f))
+                        .then(if (hasNextEpisode) Modifier.clickable(onClick = onPlayNext) else Modifier),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.SkipNext,
+                        contentDescription = "下一集",
+                        tint = if (hasNextEpisode) Color.White else Color.White.copy(alpha = 0.30f),
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
             }
         }
     }
 }
 
+/**
+ * 底部控制栏（进度条与快捷操作工具栏）
+ */
 @Composable
 private fun PlayerBottomBar(
     duration: Long,
     currentPosition: Long,
     bufferedPosition: Long,
     isLandscape: Boolean = true,
+    showEpisodeControls: Boolean = true,
     externalSeekPosition: Long?,
     onSeekTo: (Long) -> Unit,
     onRefreshPlayback: () -> Unit = {},
@@ -444,17 +472,17 @@ private fun PlayerBottomBar(
         modifier = modifier
             .fillMaxWidth()
             .padding(
-                start = insets.horizontal + 14.dp,
-                end = insets.horizontal + 14.dp,
-                top = 6.dp,
-                bottom = insets.bottom + 4.dp,
+                start = insets.horizontal + 10.dp,
+                end = insets.horizontal + 10.dp,
+                top = 0.dp,
+                bottom = insets.bottom + 2.dp,
             ),
     ) {
-        // 进度条行
+        // 进度条行（左右 padding 6.dp，与下方快捷栏首尾按钮文字完全对齐）
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 10.dp),
+                .padding(horizontal = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             val displayedPosition = when {
@@ -467,12 +495,13 @@ private fun PlayerBottomBar(
                 text = Players.formatDuration(displayedPosition),
                 color = Color.White,
                 style = TextStyle(
-                    fontSize = 14.sp,
+                    fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
+                    fontFeatureSettings = "tnum",
                 ),
             )
 
-            Spacer(modifier = Modifier.width(12.dp))
+            Spacer(modifier = Modifier.width(10.dp))
 
             val progressRatio = when {
                 userDraggingProgress -> sliderPosition
@@ -509,24 +538,25 @@ private fun PlayerBottomBar(
                 modifier = Modifier.weight(1f),
             )
 
-            Spacer(modifier = Modifier.width(12.dp))
+            Spacer(modifier = Modifier.width(10.dp))
 
             Text(
                 text = Players.formatDuration(currentDuration),
-                color = Color.White,
+                color = Color.White.copy(alpha = 0.85f),
                 style = TextStyle(
-                    fontSize = 14.sp,
+                    fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
+                    fontFeatureSettings = "tnum",
                 ),
             )
         }
 
-        // 底部快捷操作工具栏
+        Spacer(modifier = Modifier.height(2.dp))
+
+        // 底部快捷操作工具栏（两端文字与上方进度条两端时间严格对齐，紧凑上下间距）
         CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides Dp.Unspecified) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 2.dp),
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -553,15 +583,21 @@ private fun PlayerBottomBar(
                     onClick = onSetEnding,
                     onLongClick = onResetEnding,
                 )
-                PlayerQuickActionButton(
-                    text = "选集",
-                    onClick = onOpenEpisodeDrawer,
-                )
+                // 单集（含电影）时选集抽屉无可切换内容，隐藏「选集」入口
+                if (showEpisodeControls) {
+                    PlayerQuickActionButton(
+                        text = "选集",
+                        onClick = onOpenEpisodeDrawer,
+                    )
+                }
             }
         }
     }
 }
 
+/**
+ * 底部快捷纯文字操作按钮（紧凑内边距，首尾按钮与进度条两侧文字垂直对齐）
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun PlayerQuickActionButton(
@@ -571,22 +607,21 @@ private fun PlayerQuickActionButton(
 ) {
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
+            .clip(RoundedCornerShape(4.dp))
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick,
             )
-            .padding(QuickActionButtonPadding),
+            .padding(horizontal = 6.dp, vertical = 2.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text = text,
             color = Color.White,
             style = TextStyle(
-                fontSize = 14.5.sp,
+                fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
             ),
         )
     }
 }
-

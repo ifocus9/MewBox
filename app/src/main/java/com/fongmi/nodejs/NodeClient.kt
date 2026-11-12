@@ -9,9 +9,7 @@ import android.os.RemoteException
 import com.mewbox.tv.api.net.LocalMessageBridge
 import java.io.ByteArrayOutputStream
 import java.io.File
-import java.io.FilterInputStream
 import java.io.IOException
-import java.io.InputStream
 import java.io.InterruptedIOException
 import java.net.Proxy
 import java.net.SocketTimeoutException
@@ -107,7 +105,7 @@ class NodeClient(
             val query = route.indexOf('?')
             val path = if (query < 0) route else route.substring(0, query)
             if (path.endsWith("/init") || path.endsWith("/support") || path.endsWith("/action")) return FAST_CLIENT
-            if (path.endsWith("/play") || path.endsWith("/proxy")) return PLAY_CLIENT
+            if (path.endsWith("/play")) return PLAY_CLIENT
             return CLIENT
         }
 
@@ -193,6 +191,14 @@ class NodeClient(
         }
     }
 
+    fun hasCachedBundle(source: String? = null): Boolean {
+        return try {
+            restoreBundle(source) != null
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     private fun restoreBundle(source: String? = null): NodeBundle? {
         if (!source.isNullOrEmpty()) {
             val target = NodeBundle.restore(context, source)
@@ -204,6 +210,15 @@ class NodeClient(
             if (target != null) return target
         }
         return NodeBundle.restoreLatest(context)
+    }
+
+    @Synchronized
+    @Throws(Exception::class)
+    fun fetchConfigJson(source: String? = null): String {
+        if (!isRunning()) {
+            ensureStarted(source)
+        }
+        return NodeConfigMapper.transform(get("/config"))
     }
 
     @Synchronized
@@ -638,12 +653,15 @@ class NodeClient(
         return snapshot()
     }
 
-    @Throws(Exception::class)
     private fun replayInitializations() {
         val snapshotEntries = synchronized(initializations) { ArrayList(initializations.entries) }
         for ((key, value) in snapshotEntries) {
             val body = Json.parseToJsonElement(value) as? JsonObject ?: continue
-            executePost(snapshot(), NodeRoute.append(key, "/init"), body)
+            try {
+                executePost(snapshot(), NodeRoute.append(key, "/init"), body)
+            } catch (e: Exception) {
+                Timber.w(e, "重放站点初始化失败，跳过该站点: %s", key)
+            }
         }
     }
 
@@ -729,76 +747,6 @@ class NodeClient(
         val runtime = addr.toHttpUrlOrNull() ?: return value
         if (target.scheme != "http" || target.port != runtime.port) return value
         return target.newBuilder().scheme(runtime.scheme).host(runtime.host).port(runtime.port).build().toString()
-    }
-
-    @Throws(Exception::class)
-    fun proxy(api: String, params: Map<String, String>): Array<Any> {
-        val path = params["path"] ?: "/proxy"
-        return request(path) { state -> executeProxy(state, api, params) }
-    }
-
-    @Throws(Exception::class)
-    private fun executeProxy(state: RequestState, api: String, params: Map<String, String>): Array<Any> {
-        val base = state.address
-        if (base.isNullOrEmpty()) throw IOException("Node runtime is not running")
-        val call = registerCall(state, PLAY_CLIENT, proxyRequest(api, params, base))
-        var response: Response? = null
-        try {
-            response = call.execute()
-            checkCurrent(state)
-        } catch (e: Exception) {
-            response?.close()
-            unregisterCall(call)
-            throw e
-        }
-        val body = response.body
-        val headers = LinkedHashMap<String, String>()
-        for (name in response.headers.names()) {
-            headers[name] = response.header(name).orEmpty()
-        }
-        val type = response.header("Content-Type") ?: "application/octet-stream"
-        return arrayOf(response.code, type, ResponseStream(body.byteStream(), response, call), headers)
-    }
-
-    @Throws(IOException::class)
-    private fun proxyRequest(api: String, params: Map<String, String>, base: String): Request {
-        val path = params["path"]
-        val target = if (path.isNullOrEmpty()) {
-            NodeRoute.append(api, "/proxy")
-        } else if (path.startsWith("/")) {
-            "node:$path"
-        } else {
-            NodeRoute.append(api, path)
-        }
-        val parsed = (base + NodeRoute.path(target)).toHttpUrlOrNull()
-            ?: throw IOException("Invalid Node proxy route")
-        val url = parsed.newBuilder()
-        for ((key, value) in params) {
-            if (isProxyControl(key)) continue
-            url.addQueryParameter(key, value)
-        }
-        val request = Request.Builder().url(url.build())
-        copyProxyHeader(params, request, "range")
-        copyProxyHeader(params, request, "user-agent")
-        copyProxyHeader(params, request, "referer")
-        copyProxyHeader(params, request, "origin")
-        return request.build()
-    }
-
-    private fun isProxyControl(key: String): Boolean {
-        return "siteKey".equals(key, ignoreCase = true) ||
-            "path".equals(key, ignoreCase = true) ||
-            "remote-addr".equals(key, ignoreCase = true) ||
-            "range".equals(key, ignoreCase = true) ||
-            "user-agent".equals(key, ignoreCase = true) ||
-            "referer".equals(key, ignoreCase = true) ||
-            "origin".equals(key, ignoreCase = true)
-    }
-
-    private fun copyProxyHeader(params: Map<String, String>, request: Request.Builder, name: String) {
-        for ((key, value) in params) {
-            if (name.equals(key, ignoreCase = true)) request.header(name, value)
-        }
     }
 
     private data class RequestState(
@@ -901,22 +849,6 @@ class NodeClient(
                 } catch (_: InterruptedException) {
                     Thread.currentThread().interrupt()
                 }
-            }
-        }
-    }
-
-    private inner class ResponseStream(
-        `in`: InputStream,
-        private val response: Response,
-        private val call: Call,
-    ) : FilterInputStream(`in`) {
-        @Throws(IOException::class)
-        override fun close() {
-            try {
-                super.close()
-            } finally {
-                response.close()
-                unregisterCall(call)
             }
         }
     }

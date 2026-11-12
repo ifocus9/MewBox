@@ -36,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
@@ -86,11 +87,12 @@ internal fun PlayerLoadingOverlay(
                 Text(
                     text = displayText,
                     color = Color.White,
-                style = MaterialTheme.typography.bodyMedium.copy(
-                    fontSize = 13.sp,
-                    lineHeight = 16.sp,
-                    fontWeight = FontWeight.Medium,
-                    shadow = Shadow(
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 13.sp,
+                        lineHeight = 16.sp,
+                        fontWeight = FontWeight.Medium,
+                        fontFeatureSettings = "tnum",
+                        shadow = Shadow(
                             color = Color.Black.copy(alpha = 0.65f),
                             offset = Offset(0f, 1f),
                             blurRadius = 2f,
@@ -117,23 +119,31 @@ internal fun PlayerErrorOverlay(
     ) {
         Surface(
             shape = RoundedCornerShape(12.dp),
-            color = Color(0xCC1A1A1A),
+            color = Color(0xE61E1E1E),
             modifier = Modifier.padding(24.dp),
         ) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.padding(20.dp),
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 18.dp),
             ) {
                 Text(
                     text = "播放异常",
                     color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    style = TextStyle(
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    ),
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
                     text = errorMessage ?: "解析或播放直链失败",
                     color = Color.White.copy(alpha = 0.85f),
-                    style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center,
+                    style = TextStyle(
+                        fontSize = 13.sp,
+                        lineHeight = 18.sp,
+                        fontWeight = FontWeight.Normal,
+                    ),
                 )
             }
         }
@@ -162,7 +172,8 @@ internal fun BoxScope.PlayerGestureHud(
             color = Color.White,
             style = TextStyle(
                 fontSize = 13.sp,
-                fontWeight = FontWeight.Normal,
+                fontWeight = FontWeight.Medium,
+                fontFeatureSettings = "tnum",
                 textAlign = TextAlign.Center,
             ),
         )
@@ -173,7 +184,7 @@ internal fun BoxScope.PlayerGestureHud(
             imageVector = if (gestureSeekDeltaMs >= 0) Icons.Default.FastForward else Icons.Default.FastRewind,
             contentDescription = null,
             tint = Color.White,
-            modifier = Modifier.size(24.dp),
+            modifier = Modifier.size(20.dp),
         )
         Spacer(modifier = Modifier.width(8.dp))
         val sign = if (gestureSeekDeltaMs >= 0) "+" else ""
@@ -181,8 +192,9 @@ internal fun BoxScope.PlayerGestureHud(
             text = "${Players.formatDuration(gestureSeekTargetMs)} ($sign${gestureSeekDeltaMs / 1000}s)",
             color = Color.White,
             style = TextStyle(
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Normal,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                fontFeatureSettings = "tnum",
                 textAlign = TextAlign.Center,
             ),
         )
@@ -195,12 +207,13 @@ internal fun BoxScope.PlayerGestureHud(
             tint = Color.White,
             modifier = Modifier.size(20.dp),
         )
-        Spacer(modifier = Modifier.width(10.dp))
+        Spacer(modifier = Modifier.width(8.dp))
         LinearProgressIndicator(
             progress = { currentBrightness },
             modifier = Modifier
                 .width(100.dp)
-                .height(4.dp),
+                .height(4.dp)
+                .clip(RoundedCornerShape(2.dp)),
             color = Color.White,
             trackColor = Color.White.copy(alpha = 0.3f),
         )
@@ -218,12 +231,13 @@ internal fun BoxScope.PlayerGestureHud(
             tint = Color.White,
             modifier = Modifier.size(20.dp),
         )
-        Spacer(modifier = Modifier.width(10.dp))
+        Spacer(modifier = Modifier.width(8.dp))
         LinearProgressIndicator(
             progress = { currentVolumeRatio },
             modifier = Modifier
                 .width(100.dp)
-                .height(4.dp),
+                .height(4.dp)
+                .clip(RoundedCornerShape(2.dp)),
             color = Color.White,
             trackColor = Color.White.copy(alpha = 0.3f),
         )
@@ -252,7 +266,7 @@ private fun BoxScope.GestureHudPill(
     ) {
         Surface(
             shape = RoundedCornerShape(12.dp),
-            color = Color(0xCC000000),
+            color = Color(0x80000000),
             modifier = modifier.then(
                 if (topPadding > 0.dp) {
                     Modifier.padding(top = insets.top + topPadding)
@@ -262,7 +276,7 @@ private fun BoxScope.GestureHudPill(
             ),
         ) {
             Row(
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 content = content,
             )
@@ -272,7 +286,7 @@ private fun BoxScope.GestureHudPill(
 
 /**
  * 播放器轻量操作提示胶囊（用于刷新、跳过片头片尾、选集提示等操作反馈）
- * 视觉与手势 HUD 胶囊统一：12dp 圆角 / 80% 纯黑 / 16×10 内边距 / Normal 字重。
+ * 视觉与手势 HUD 胶囊统一：12dp 圆角 / 50% 纯黑 / 16×8 内边距 / 13sp Medium 字重。
  * 显隐、动画与定位仍由 SnackbarHost 托管，本组件只负责外观渲染。
  */
 @Composable
@@ -282,11 +296,11 @@ fun PlayerToastPill(
 ) {
     Surface(
         shape = RoundedCornerShape(12.dp),
-        color = Color(0xCC000000),
+        color = Color(0x80000000),
         modifier = modifier,
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
@@ -294,7 +308,8 @@ fun PlayerToastPill(
                 color = Color.White,
                 style = TextStyle(
                     fontSize = 13.sp,
-                    fontWeight = FontWeight.Normal,
+                    lineHeight = 18.sp,
+                    fontWeight = FontWeight.Medium,
                     textAlign = TextAlign.Center,
                 ),
             )

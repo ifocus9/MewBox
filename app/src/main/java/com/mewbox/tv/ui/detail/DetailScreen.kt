@@ -2,7 +2,7 @@
 
 package com.mewbox.tv.ui.detail
 
-import android.widget.Toast
+import com.mewbox.tv.util.AppToast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
@@ -52,6 +52,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mewbox.tv.api.tmdb.TmdbClient
 import com.mewbox.tv.ui.components.ErrorState
 import com.mewbox.tv.ui.components.LoadingState
+import com.mewbox.tv.player.PlayerTrack
 import com.mewbox.tv.ui.player.FullScreenEpisodeDrawer
 import com.mewbox.tv.ui.player.PlayerToastPill
 import com.mewbox.tv.ui.player.PlayerWindowEffects
@@ -150,7 +151,7 @@ fun DetailScreen(
 
     val backdropUrl = state.tmdbDetail?.backdropPath?.let {
         TmdbClient.imageUrl(state.tmdbImageBase, it, "w1280")
-    } ?: state.vod?.vodPic
+    } ?: state.quickBackdrop ?: state.vod?.vodPic
 
     var backdropSeed by remember {
         mutableStateOf(PosterSeedMemory.seedOf(initialPic) ?: PosterSeedMemory.seedOf(backdropUrl))
@@ -218,7 +219,7 @@ fun DetailScreen(
                 snackbarHostState.currentSnackbarData?.dismiss()
                 job.cancel()
             } else {
-                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                AppToast.show(msg)
             }
             viewModel.clearToast()
         }
@@ -309,6 +310,8 @@ fun DetailScreen(
                             },
                             onSelectFlag = { flag -> viewModel.selectFlag(flag) },
                             onSelectSource = { targetVod -> viewModel.changeSource(targetVod, shouldAutoPlay = false) },
+                            quickBackdrop = state.quickBackdrop,
+                            quickPoster = state.quickPoster,
                             onTitleLongClick = { viewModel.triggerChangeSourcesSearch() },
                         )
 
@@ -385,6 +388,9 @@ fun DetailScreen(
                                 onResetOpening = { viewModel.resetOpening() },
                                 onSetEnding = { viewModel.setEnding() },
                                 onResetEnding = { viewModel.resetEnding() },
+                                onSelectTrack = { viewModel.selectTrack(it) },
+                                onDisableTrack = { viewModel.setTrackTypeDisabled(it, true) },
+                                onResetToDefault = { viewModel.resetTrackTypeToDefault(it) },
                                 modifier = Modifier.fillMaxSize(),
                             )
 

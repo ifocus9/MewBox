@@ -285,10 +285,13 @@ object PlayerTrackFormatter {
             mime.equals(MimeTypes.AUDIO_TRUEHD, ignoreCase = true) -> {
                 if (format.codecs?.contains("atmos", ignoreCase = true) == true) "TrueHD Atmos" else "TrueHD"
             }
-            mime.startsWith("audio/dts", ignoreCase = true) -> {
+            mime.contains("dts", ignoreCase = true) || format.codecs?.contains("dts", ignoreCase = true) == true -> {
                 when {
                     format.codecs?.contains("x", ignoreCase = true) == true -> "DTS:X"
-                    mime.equals(MimeTypes.AUDIO_DTS_HD, ignoreCase = true) -> "DTS-HD"
+                    mime.equals(MimeTypes.AUDIO_DTS_HD, ignoreCase = true) ||
+                        mime.contains("dts.hd", ignoreCase = true) ||
+                        mime.contains("dts-hd", ignoreCase = true) -> "DTS-HD"
+                    mime.equals(MimeTypes.AUDIO_DTS_EXPRESS, ignoreCase = true) -> "DTS Express"
                     else -> "DTS"
                 }
             }

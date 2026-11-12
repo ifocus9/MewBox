@@ -99,11 +99,17 @@ class DetailPlaybackTracker @Inject constructor(
 
                         // 片尾自动跳过：对齐 FongMi VodPlaybackController
                         val ending = getEnding()
-                        if (ending > 0L && playerState.duration > 0L && playerState.isPlaying) {
+                        val opening = getOpening()
+                        if (ending > 0L &&
+                            playerState.duration > ending &&
+                            playerState.currentPosition > opening &&
+                            playerState.isPlaying
+                        ) {
                             val remaining = playerState.duration - playerState.currentPosition
                             if (remaining <= ending) {
                                 if (!endingSkipHandled) {
                                     endingSkipHandled = true
+                                    playbackEndHandled = true // 避免随后 ENDED 重复触发跳集
                                     Timber.i("触发片尾自动跳过: remaining=${remaining}ms, ending=${ending}ms")
                                     onAutoPlayNext()
                                 }
@@ -113,7 +119,7 @@ class DetailPlaybackTracker @Inject constructor(
                         }
                     }
                     PlaybackState.ENDED -> {
-                        if (!playbackEndHandled) {
+                        if (!playbackEndHandled && !endingSkipHandled) {
                             playbackEndHandled = true
                             if (session.hasSucceeded) {
                                 if (playerState.currentPosition > 0L) {

@@ -59,6 +59,10 @@ data class TmdbGenre(
 data class TmdbImageItem(
     @SerialName("file_path") val filePath: String? = null,
     @SerialName("vote_average") val voteAverage: Double = 0.0,
+    @SerialName("iso_639_1") val iso639: String? = null,
+    @SerialName("width") val width: Int = 0,
+    @SerialName("height") val height: Int = 0,
+    @SerialName("aspect_ratio") val aspectRatio: Double = 0.0,
 )
 
 @Serializable

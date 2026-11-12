@@ -1,11 +1,8 @@
 package com.mewbox.tv.ui.history
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandHorizontally
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -32,12 +29,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -49,6 +47,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -65,6 +64,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import coil3.compose.AsyncImagePainter
+import com.mewbox.tv.api.douban.WishStatus
 import com.mewbox.tv.bean.History
 import com.mewbox.tv.ui.components.EmptyState
 import com.mewbox.tv.ui.components.LoadingState
@@ -72,16 +72,21 @@ import com.mewbox.tv.ui.components.PosterPlaceholder
 import com.mewbox.tv.ui.components.glassTopBarSurface
 import com.mewbox.tv.ui.theme.OrangeBadge
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun HistoryScreen(
     onNavigateToPlay: (siteKey: String, vodId: String, vodName: String, vodPic: String) -> Unit,
+    onNavigateToSearch: (keyword: String) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: HistoryViewModel = hiltViewModel(),
+    wishViewModel: WishViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val wishState by wishViewModel.uiState.collectAsStateWithLifecycle()
     var showClearDialog by remember { mutableStateOf(false) }
     var isDeleteMode by rememberSaveable { mutableStateOf(false) }
+    // 0 = 播放记录（默认），1 = 豆瓣想看；rememberSaveable 保证切顶层 Tab 回来保持上次分段
+    var segment by rememberSaveable { mutableIntStateOf(0) }
 
     // 当列表为空时自动退出删除模式
     LaunchedEffect(state.items.isEmpty()) {
@@ -129,6 +134,30 @@ fun HistoryScreen(
                                 color = MaterialTheme.colorScheme.primary,
                             )
                         }
+                    } else if (segment == 1) {
+                        // 豆瓣想看分段：同步按钮（点击 30s 节流，长按强制同步）
+                        Box(
+                            modifier = Modifier
+                                .padding(end = 8.dp)
+                                .size(40.dp)
+                                .glassTopBarSurface(CircleShape, MaterialTheme.colorScheme.surfaceBright)
+                                .combinedClickable(
+                                    onClick = { wishViewModel.sync() },
+                                    onLongClick = { wishViewModel.sync(forced = true) },
+                                ),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "同步豆瓣想看",
+                                modifier = Modifier.size(20.dp),
+                                tint = if (wishState.status == WishStatus.Refreshing) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface
+                                },
+                            )
+                        }
                     } else if (state.items.isNotEmpty()) {
                         Box(
                             modifier = Modifier
@@ -159,40 +188,76 @@ fun HistoryScreen(
                 .fillMaxSize()
                 .padding(padding),
         ) {
-            when {
-                state.isLoading -> {
-                    LoadingState(text = "正在获取观看历史...")
-                }
-                state.items.isEmpty() -> {
-                    EmptyState(message = "暂无记录")
-                }
-                else -> {
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 150.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
+            Column(modifier = Modifier.fillMaxSize()) {
+                // 顶部分段切换（删除模式属于播放记录的局部状态，进入时隐藏分段避免焦点跨栏）
+                if (!isDeleteMode) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        items(state.items, key = { it.key }) { history ->
-                            HistoryItemCard(
-                                history = history,
-                                isDeleteMode = isDeleteMode,
-                                onClick = {
-                                    if (isDeleteMode) {
-                                        viewModel.deleteHistory(history.key)
-                                    } else {
-                                        onNavigateToPlay(history.siteKey, history.vodId, history.vodName, history.vodPic)
+                        SegmentPill(
+                            text = "播放记录",
+                            selected = segment == 0,
+                            onClick = { segment = 0 },
+                        )
+                        SegmentPill(
+                            text = if (wishState.total > 0) "豆瓣想看 ${wishState.total}" else "豆瓣想看",
+                            selected = segment == 1,
+                            onClick = { segment = 1 },
+                        )
+                    }
+                }
+
+                if (segment == 1 && !isDeleteMode) {
+                    WishTab(
+                        onNavigateToSearch = onNavigateToSearch,
+                        modifier = Modifier.weight(1f),
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .weight(1f),
+                    ) {
+                        when {
+                            state.isLoading -> {
+                                LoadingState(text = "正在获取观看历史...")
+                            }
+                            state.items.isEmpty() -> {
+                                EmptyState(message = "暂无记录")
+                            }
+                            else -> {
+                                LazyColumn(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 150.dp),
+                                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                                ) {
+                                    items(state.items, key = { it.key }) { history ->
+                                        HistoryItemCard(
+                                            history = history,
+                                            isDeleteMode = isDeleteMode,
+                                            onClick = {
+                                                if (isDeleteMode) {
+                                                    viewModel.deleteHistory(history.key)
+                                                } else {
+                                                    onNavigateToPlay(history.siteKey, history.vodId, history.vodName, history.vodPic)
+                                                }
+                                            },
+                                            onLongClick = {
+                                                if (!isDeleteMode) {
+                                                    isDeleteMode = true
+                                                }
+                                            },
+                                            onDeleteClick = {
+                                                viewModel.deleteHistory(history.key)
+                                            },
+                                            modifier = Modifier.animateItem(),
+                                        )
                                     }
-                                },
-                                onLongClick = {
-                                    if (!isDeleteMode) {
-                                        isDeleteMode = true
-                                    }
-                                },
-                                onDeleteClick = {
-                                    viewModel.deleteHistory(history.key)
-                                },
-                                modifier = Modifier.animateItem(),
-                            )
+                                }
+                            }
                         }
                     }
                 }
@@ -221,6 +286,27 @@ fun HistoryScreen(
                     Text("取消")
                 }
             },
+        )
+    }
+}
+
+/** 追剧页顶部分段切换 pill：选中态用主题主色胶囊。 */
+@Composable
+private fun SegmentPill(
+    text: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerLow,
+        contentColor = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.clickable(onClick = onClick),
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelLarge,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
         )
     }
 }
@@ -357,25 +443,42 @@ private fun HistoryItemCard(
                 )
             }
 
-            // 删除模式下的删除按钮
-            AnimatedVisibility(
-                visible = isDeleteMode,
-                enter = fadeIn() + expandHorizontally(),
-                exit = fadeOut() + shrinkHorizontally(),
+            // 右侧动作按钮：始终固定占位（36dp），只在图标/配色间切换，
+            // 避免进入删除模式时横向展开挤压左侧的剧集信息
+            val actionContainerColor by animateColorAsState(
+                targetValue = if (isDeleteMode) {
+                    MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.8f)
+                } else {
+                    MaterialTheme.colorScheme.primaryContainer
+                },
+                label = "HistoryActionContainerColor",
+            )
+            Box(
+                modifier = Modifier
+                    .padding(start = 12.dp)
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(actionContainerColor)
+                    .combinedClickable(
+                        onClickLabel = if (isDeleteMode) "删除记录" else "继续播放",
+                        onLongClickLabel = if (isDeleteMode) null else "管理记录",
+                        onLongClick = if (isDeleteMode) null else onLongClick,
+                        onClick = if (isDeleteMode) onDeleteClick else onClick,
+                    ),
+                contentAlignment = Alignment.Center,
             ) {
-                Box(
-                    modifier = Modifier
-                        .padding(start = 12.dp)
-                        .size(36.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.8f))
-                        .clickable(onClick = onDeleteClick),
-                    contentAlignment = Alignment.Center,
-                ) {
+                Crossfade(
+                    targetState = isDeleteMode,
+                    label = "HistoryActionIcon",
+                ) { deleteMode ->
                     Icon(
-                        imageVector = Icons.Default.DeleteOutline,
-                        contentDescription = "删除",
-                        tint = MaterialTheme.colorScheme.error,
+                        imageVector = if (deleteMode) Icons.Default.DeleteOutline else Icons.Default.PlayArrow,
+                        contentDescription = if (deleteMode) "删除" else "播放",
+                        tint = if (deleteMode) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onPrimaryContainer
+                        },
                         modifier = Modifier.size(20.dp),
                     )
                 }

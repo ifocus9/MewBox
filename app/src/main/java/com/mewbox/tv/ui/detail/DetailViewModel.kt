@@ -4,15 +4,19 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mewbox.tv.api.config.SettingsRepository
+import com.mewbox.tv.api.tmdb.TmdbClient
 import com.mewbox.tv.api.tmdb.bean.TmdbMedia
 import com.mewbox.tv.bean.Episode
 import com.mewbox.tv.bean.Flag
+import com.mewbox.tv.bean.History
 import com.mewbox.tv.bean.PlayUrl
 import com.mewbox.tv.bean.Site
 import com.mewbox.tv.bean.Vod
 import com.mewbox.tv.domain.SiteRepository
 import com.mewbox.tv.player.PlaybackState
+import com.mewbox.tv.player.PlayerTrack
 import com.mewbox.tv.player.Players
+import com.mewbox.tv.util.AppToast
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -56,8 +60,40 @@ class DetailViewModel @Inject constructor(
     val uiState: StateFlow<DetailUiState> = _uiState.asStateFlow()
 
     private var playJob: Job? = null
+    private var tmdbJob: Job? = null
+    private var tmdbRunningName: String? = null
     private var lastHeaders: Map<String, String> = emptyMap()
     private var lastFormat: String = ""
+
+    private fun startTmdbLoad(name: String) {
+        val cleaned = TmdbClient.cleanTitle(name)
+        Timber.d("startTmdbLoad: name=$name, cleaned=$cleaned")
+        if (cleaned.isBlank()) return
+        // 同一片名已在跑时不要重复取消重启，否则每次重起都会把 searchMulti 的超时预算清零
+        if (tmdbJob?.isActive == true && tmdbRunningName.equals(cleaned, ignoreCase = true)) {
+            Timber.d("startTmdbLoad: 同名任务仍在运行，跳过重复启动: $cleaned")
+            return
+        }
+        tmdbJob?.cancel()
+        tmdbRunningName = cleaned
+        tmdbJob = tmdbCoordinator.loadTmdbInfo(
+            scope = viewModelScope,
+            vodName = name,
+            onQuick = { poster, backdrop ->
+                _uiState.update { it.copy(quickPoster = poster, quickBackdrop = backdrop) }
+            },
+            onLoaded = { detail, imageBase ->
+                _uiState.update {
+                    it.copy(
+                        tmdbDetail = detail,
+                        tmdbImageBase = imageBase,
+                        quickPoster = TmdbClient.imageUrl(imageBase, detail.posterPath, "w780").ifEmpty { null },
+                        quickBackdrop = TmdbClient.imageUrl(imageBase, detail.backdropPath, "w1280").ifEmpty { null },
+                    )
+                }
+            },
+        )
+    }
 
     init {
         observePlayerState()
@@ -122,7 +158,12 @@ class DetailViewModel @Inject constructor(
 
             val site = repository.getSite(siteKey)
             if (site == null) {
-                _uiState.update { it.copy(isLoading = false, isResolvingPlay = false, error = "站点不存在或已被禁用") }
+                val msg = if (siteKey == SiteRepository.PUSH_KEY) {
+                    "未找到可用的推送源（请先添加包含推送能力的 Node.js 订阅源）"
+                } else {
+                    "站点不存在或已被禁用"
+                }
+                _uiState.update { it.copy(isLoading = false, isResolvingPlay = false, error = msg) }
                 return@launch
             }
 
@@ -154,17 +195,42 @@ class DetailViewModel @Inject constructor(
                         ),
                     )
                 }
+                // 优先以权威豆瓣片名并行起跑 TMDB
+                if (targetName.isNotBlank()) {
+                    startTmdbLoad(targetName)
+                }
                 startAutoCrossSourceResolve(targetName, shouldAutoPlay)
                 return@launch
             }
 
+            // 常规源：立即使用已知入口片名与站源详情并行起跑 TMDB，无需等站源 RTT
+            val kickoffName = fallbackVodName.ifBlank { initialVodName }
+            if (kickoffName.isNotBlank()) {
+                startTmdbLoad(kickoffName)
+            }
+
             // 常规源：拉取详情
             val res = repository.getDetailContent(site, vodId)
-            val vod = res.list.firstOrNull()
-            if (vod == null) {
+            val rawVod = res.list.firstOrNull()
+            if (rawVod == null) {
                 _uiState.update { it.copy(isLoading = false, isResolvingPlay = false, error = "获取影片详情失败或已下架") }
                 return@launch
             }
+            val vod = rawVod.copy(
+                vodName = if (
+                    fallbackVodName.isNotBlank() &&
+                    (rawVod.vodName.isBlank() ||
+                        rawVod.vodName == vodId ||
+                        rawVod.vodName.startsWith("http://", ignoreCase = true) ||
+                        rawVod.vodName.startsWith("https://", ignoreCase = true) ||
+                        rawVod.vodName.startsWith("push://", ignoreCase = true))
+                ) {
+                    fallbackVodName
+                } else {
+                    rawVod.vodName
+                },
+                vodPic = rawVod.vodPic.ifBlank { initialVodPic },
+            )
 
             // 检查历史记录以恢复进度
             val history = repository.getHistory(site.key, vod.vodId)
@@ -192,9 +258,21 @@ class DetailViewModel @Inject constructor(
                 )
             }
 
-            // 异步获取 TMDB 海报、Logo、评分与演职员
-            tmdbCoordinator.loadTmdbInfo(viewModelScope, vod.vodName) { detail, imageBase ->
-                _uiState.update { it.copy(tmdbDetail = detail, tmdbImageBase = imageBase) }
+            // 加载该视频历史保存的字幕、音轨、视轨用户偏好并注入播放器
+            val currentConfigUrl = settingsRepository.currentConfigUrl
+            val historyKey = History.key(site.key, vod.vodId, currentConfigUrl)
+            val preferences = repository.getTrackPreferences(historyKey).ifEmpty {
+                repository.getTrackPreferences(History.key(site.key, vod.vodId))
+            }
+            players.setPlaybackSession(historyKey, preferences)
+
+            // 校验站源真实片名与并行起跑片名：
+            // 若站源片名清洗后与起跑片名不同（或者起跑时无片名），则按真实片名重新拉取；
+            // 若清洗后一致，则保留已经起跑的 TMDB 流程，不重复发起请求
+            val currentCleaned = TmdbClient.cleanTitle(kickoffName)
+            val realCleaned = TmdbClient.cleanTitle(vod.vodName)
+            if (currentCleaned.isBlank() || !currentCleaned.equals(realCleaned, ignoreCase = true)) {
+                startTmdbLoad(vod.vodName)
             }
 
             // 若由历史记录点击进入 (shouldAutoPlay = true)，立即起播当前集
@@ -231,8 +309,9 @@ class DetailViewModel @Inject constructor(
                         autoSearchMessage = null,
                     )
                 }
-                tmdbCoordinator.loadTmdbInfo(viewModelScope, validVod.vodName) { detail, imageBase ->
-                    _uiState.update { it.copy(tmdbDetail = detail, tmdbImageBase = imageBase) }
+                // 仅当之前未成功启动 TMDB 流程且无详情时才补充启动，避免采集站脏标题推翻豆瓣权威名
+                if (tmdbJob == null && _uiState.value.tmdbDetail == null) {
+                    startTmdbLoad(vodName.ifBlank { validVod.vodName })
                 }
                 if (shouldAutoPlay) {
                     _uiState.update { it.copy(startInFullscreen = true) }
@@ -369,11 +448,28 @@ class DetailViewModel @Inject constructor(
                 )
             }
 
-            if (result.parse == 1) {
-                _uiState.update { it.copy(toastMessage = "该线路返回为网页嗅探地址，建议切换其它线路或换源") }
+            if (result.needSniff) {
+                Timber.w("线路返回网页地址，已跳过播放: flag=${flag.flag}, url=${result.url}")
+                val msg = "该线路为网页地址，暂不支持播放，请切换其它线路或换源"
+                _uiState.update { it.copy(toastMessage = msg) }
+                AppToast.show(msg)
+                players.reportError(msg, result.url)
+                return@launch
             }
             if (result.url.isBlank()) {
-                _uiState.update { it.copy(toastMessage = "该线路解析链接为空，请尝试切换其它线路或换源") }
+                val msg = "该线路解析链接为空，请尝试切换其它线路或换源"
+                _uiState.update { it.copy(toastMessage = msg) }
+                AppToast.show(msg)
+                players.reportError(msg)
+                return@launch
+            }
+
+            if (Players.isIsoFormat(result.url, episode.name, result.format)) {
+                Timber.w("检测到 ISO 原盘镜像，拦截播放: site=${site.name}, flag=${flag.flag}, ep=${episode.name}, url=${result.url}")
+                val msg = "检测到该资源为 ISO 原盘镜像，内置播放器暂不支持，请切换其它线路或格式"
+                _uiState.update { it.copy(toastMessage = msg) }
+                AppToast.show(msg)
+                players.reportError(msg, result.url)
                 return@launch
             }
 
@@ -402,6 +498,14 @@ class DetailViewModel @Inject constructor(
         val episode = _uiState.value.selectedEpisode ?: return
         val currentPosition = players.state.value.currentPosition
         _uiState.update { it.copy(selectedPlayUrl = playUrl) }
+
+        if (Players.isIsoFormat(playUrl.url, episode.name, lastFormat)) {
+            val msg = "检测到该清晰度为 ISO 原盘镜像，内置播放器暂不支持"
+            _uiState.update { it.copy(toastMessage = msg) }
+            AppToast.show(msg)
+            players.reportError(msg, playUrl.url)
+            return
+        }
 
         playbackTracker.createSession(site, vod, flag, episode, _uiState.value.opening, _uiState.value.ending)
         val title = "${vod.vodName} - ${episode.name} (${playUrl.name})"
@@ -476,7 +580,21 @@ class DetailViewModel @Inject constructor(
         playbackTracker.saveActiveSessionIfSucceeded(_uiState.value.opening, _uiState.value.ending)
         playbackTracker.clearSession()
         players.stop()
-        loadDetail(newVod.siteKey, newVod.vodId, newVod.vodName, shouldAutoPlay = shouldAutoPlay)
+
+        val currentSite = _uiState.value.currentSite
+        val currentVod = _uiState.value.vod
+        if (currentSite != null && currentVod != null) {
+            viewModelScope.launch {
+                val configUrl = settingsRepository.currentConfigUrl
+                val oldKey = History.key(currentSite.key, currentVod.vodId, configUrl)
+                val newKey = History.key(newVod.siteKey, newVod.vodId, configUrl)
+                val targetSite = repository.getSite(newVod.siteKey) ?: Site(newVod.siteKey, newVod.siteKey, 4, "")
+                repository.copyHistoryAndPreferences(oldKey, newKey, targetSite, newVod)
+                loadDetail(newVod.siteKey, newVod.vodId, newVod.vodName, shouldAutoPlay = shouldAutoPlay)
+            }
+        } else {
+            loadDetail(newVod.siteKey, newVod.vodId, newVod.vodName, shouldAutoPlay = shouldAutoPlay)
+        }
     }
 
     fun clearToast() {
@@ -566,6 +684,8 @@ class DetailViewModel @Inject constructor(
                     it.copy(
                         tmdbDetail = detail,
                         tmdbImageBase = imageBase,
+                        quickPoster = TmdbClient.imageUrl(imageBase, detail.posterPath, "w780").ifEmpty { null },
+                        quickBackdrop = TmdbClient.imageUrl(imageBase, detail.backdropPath, "w1280").ifEmpty { null },
                         showTmdbMatchDialog = false,
                         isSearchingTmdb = false,
                         toastMessage = "已修正匹配为《${detail.displayTitle}》",
@@ -667,6 +787,47 @@ class DetailViewModel @Inject constructor(
             opening = opening,
             ending = ending,
         )
+    }
+
+    fun getEffectiveHistoryKey(): String {
+        val siteKey = _uiState.value.currentSite?.key ?: currentSiteKey
+        val vodId = _uiState.value.vod?.vodId ?: currentVodId
+        val configUrl = settingsRepository.currentConfigUrl
+        return History.key(siteKey, vodId, configUrl)
+    }
+
+    fun selectTrack(track: PlayerTrack) {
+        if (!track.isSupported) {
+            com.mewbox.tv.util.AppToast.show("当前设备暂不支持该音轨解码 (${track.name})")
+            return
+        }
+        val key = getEffectiveHistoryKey()
+        val success = players.selectTrack(track) { pref ->
+            viewModelScope.launch {
+                repository.saveTrackPreference(pref.copy(key = key))
+            }
+        }
+        if (!success) {
+            com.mewbox.tv.util.AppToast.show("当前设备暂不支持该音轨解码，已保持原音轨")
+        }
+    }
+
+    fun setTrackTypeDisabled(type: Int, disabled: Boolean) {
+        val key = getEffectiveHistoryKey()
+        players.setTrackTypeDisabled(type, disabled) { pref ->
+            viewModelScope.launch {
+                repository.saveTrackPreference(pref.copy(key = key))
+            }
+        }
+    }
+
+    fun resetTrackTypeToDefault(type: Int) {
+        val key = getEffectiveHistoryKey()
+        players.resetTrackTypeToDefault(type) {
+            viewModelScope.launch {
+                repository.removeTrackPreference(key, type)
+            }
+        }
     }
 
     override fun onCleared() {

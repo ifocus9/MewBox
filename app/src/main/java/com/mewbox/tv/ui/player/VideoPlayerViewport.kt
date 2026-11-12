@@ -3,6 +3,7 @@ package com.mewbox.tv.ui.player
 import android.app.Activity
 import android.content.Context
 import android.media.AudioManager
+import android.provider.Settings
 import android.util.TypedValue
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -28,6 +29,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -38,7 +42,9 @@ import coil3.compose.AsyncImage
 import com.mewbox.tv.bean.Vod
 import com.mewbox.tv.player.PlaybackState
 import com.mewbox.tv.player.PlayerState
+import com.mewbox.tv.player.PlayerTrack
 import com.mewbox.tv.player.Players
+import com.mewbox.tv.util.AppToast
 import kotlinx.coroutines.delay
 
 private const val CONTROLS_AUTO_HIDE_DELAY_MS = 4500L
@@ -46,6 +52,41 @@ private const val GESTURE_SEEK_FULL_SWIPE_MS = 90_000L
 
 /** 长按屏幕时的临时倍速 */
 private const val LONG_PRESS_BOOST_SPEED = 3.0f
+
+/** 手势亮度下限：避免把背光压到 0 导致整屏全黑 */
+private const val MIN_GESTURE_BRIGHTNESS = 0.01f
+
+/**
+ * 读取当前系统亮度并归一化到 0..1，作为亮度手势的起步基准。
+ *
+ * 自动亮度开启时系统仍会把实时生效值写回 SCREEN_BRIGHTNESS，因此这里拿到的是用户当下
+ * 真正看到的亮度，而不是写死的 0.5f —— 后者会让首次滑动的瞬间亮度跳一大截。
+ */
+private fun readSystemBrightness(context: Context): Float = try {
+    val raw = Settings.System.getInt(
+        context.contentResolver,
+        Settings.System.SCREEN_BRIGHTNESS,
+        128,
+    )
+    (raw.coerceIn(0, 255) / 255f).coerceIn(MIN_GESTURE_BRIGHTNESS, 1f)
+} catch (e: Exception) {
+    0.5f
+}
+
+/**
+ * 把 Window 级 screenBrightness 还原成「跟随系统」。
+ *
+ * 这个 override 只要留在 LayoutParams 里，窗口每次重新获得焦点（切回前台、收起通知栏、
+ * 解锁）都会被 WindowManager 重新 apply 一次，亮度会瞬间跳到上次手势设定的值。
+ */
+private fun resetWindowBrightness(activity: Activity?) {
+    val window = activity?.window ?: return
+    val lp = window.attributes
+    if (lp.screenBrightness >= 0f) {
+        lp.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+        window.attributes = lp
+    }
+}
 
 /**
  * 完整视频播放视窗组件
@@ -76,6 +117,9 @@ fun VideoPlayerViewport(
     onResetOpening: () -> Unit = {},
     onSetEnding: () -> Unit = {},
     onResetEnding: () -> Unit = {},
+    onSelectTrack: (PlayerTrack) -> Unit = { players.selectTrack(it) },
+    onDisableTrack: (Int) -> Unit = { players.setTrackTypeDisabled(it, true) },
+    onResetToDefault: (Int) -> Unit = { players.resetTrackTypeToDefault(it) },
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -107,9 +151,35 @@ fun VideoPlayerViewport(
         }
     }
 
+    // 亮度手势从「当前真实系统亮度」起步，避免首次滑动就跳到固定的 0.5
+    val systemBrightness = remember(context) { readSystemBrightness(context) }
     var isBrightnessAdjusting by remember { mutableStateOf(false) }
-    var currentBrightness by remember { mutableFloatStateOf(0.5f) }
-    var initialBrightness by remember { mutableFloatStateOf(0.5f) }
+    var currentBrightness by remember { mutableFloatStateOf(systemBrightness) }
+    var initialBrightness by remember { mutableFloatStateOf(systemBrightness) }
+
+    // screenBrightness 是 Window 级覆盖，只在「播放会话 + 前台」期间有效：
+    // 切到后台立即释放，让其它 app 完全使用系统亮度，回到前台也不会被重新 apply 成旧值；
+    // 退出播放页（组件销毁）时同样还原，否则首页 / 设置页会继承播放时调过的亮度。
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_STOP -> resetWindowBrightness(activity)
+                Lifecycle.Event.ON_START -> {
+                    // override 已释放，HUD 基准同步回真实系统亮度，避免下一次手势仍从旧值起步
+                    val brightness = readSystemBrightness(context)
+                    currentBrightness = brightness
+                    initialBrightness = brightness
+                }
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            resetWindowBrightness(activity)
+        }
+    }
 
     var isVolumeAdjusting by remember { mutableStateOf(false) }
     var currentVolumeRatio by remember { mutableFloatStateOf(0.5f) }
@@ -290,7 +360,7 @@ fun VideoPlayerViewport(
                         onBrightnessChange = { deltaRatioY ->
                             val window = activity?.window
                             val lp = window?.attributes
-                            val target = (initialBrightness + deltaRatioY * 1.5f).coerceIn(0.01f, 1f)
+                            val target = (initialBrightness + deltaRatioY * 1.5f).coerceIn(MIN_GESTURE_BRIGHTNESS, 1f)
                             currentBrightness = target
                             lp?.screenBrightness = target
                             window?.attributes = lp
@@ -414,16 +484,20 @@ fun VideoPlayerViewport(
             tracks = tracks,
             isTypeDisabled = if (type == C.TRACK_TYPE_TEXT) playerState.isSubtitleDisabled else false,
             onSelectTrack = { track ->
-                players.selectTrack(track)
-                android.widget.Toast.makeText(context, "已切换：${track.name}", android.widget.Toast.LENGTH_SHORT).show()
+                if (!track.isSupported) {
+                    AppToast.show("当前设备暂不支持该音轨解码 (${track.name})")
+                    return@TrackSelectionDialog
+                }
+                onSelectTrack(track)
+                AppToast.show("已切换：${track.name}")
             },
             onDisableTrack = {
-                players.setTrackTypeDisabled(type, true)
-                android.widget.Toast.makeText(context, "已关闭字幕", android.widget.Toast.LENGTH_SHORT).show()
+                onDisableTrack(type)
+                AppToast.show("已关闭字幕")
             },
             onResetToDefault = {
-                players.resetTrackTypeToDefault(type)
-                android.widget.Toast.makeText(context, "已恢复系统自适应", android.widget.Toast.LENGTH_SHORT).show()
+                onResetToDefault(type)
+                AppToast.show("已恢复系统自适应")
             },
             onDismiss = { activeTrackType = null },
         )

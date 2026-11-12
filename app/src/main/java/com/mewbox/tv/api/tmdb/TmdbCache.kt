@@ -12,8 +12,10 @@ import javax.inject.Singleton
 /**
  * TMDB 两级缓存：
  * 1. 内存 LruCache — 最近 50 条详情，进程存活期间有效
- * 2. 磁盘负缓存 — 持久化“TMDB 无收录”记录，7 天过期，避免冷门片反复触发无效网络请求
+ * 2. 磁盘负缓存 — 仅持久化「接口成功返回零候选」的记录，7 天过期，避免冷门片反复触发无效网络请求
  * 3. 磁盘手动修正缓存 — 持久化用户手动指定的 TMDB 匹配结果，永久生效
+ *
+ * 注意：超时 / 网络错误 / 严格匹配未命中但仍有候选，都不写负缓存。
  */
 @Singleton
 class TmdbCache @Inject constructor(
@@ -23,7 +25,9 @@ class TmdbCache @Inject constructor(
         private val NEGATIVE_TTL_MS = TimeUnit.DAYS.toMillis(7)
         private const val PREF_NAME = "tmdb_negative_cache"
         private const val PREF_MANUAL_NAME = "tmdb_manual_overrides"
-        private const val KEY_NEG_PREFIX = "tmdb_neg_"
+        // v2：旧版把「严格匹配未命中」也写进负缓存，导致译名差异片被误判 7 天不换海报。
+        // 换前缀让所有 v1 条目一次性失效，无须清 App 数据。
+        private const val KEY_NEG_PREFIX = "tmdb_neg_v2_"
     }
 
     private val json = Json {

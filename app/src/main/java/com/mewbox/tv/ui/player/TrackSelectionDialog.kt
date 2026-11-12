@@ -171,8 +171,13 @@ internal fun TrackSelectionDialog(
                             TrackItemRow(
                                 title = track.name,
                                 subtitle = track.details,
+                                isSupported = track.isSupported,
                                 isSelected = selected,
                                 onClick = {
+                                    if (!track.isSupported) {
+                                        com.mewbox.tv.util.AppToast.show("当前设备暂不支持解码此音轨 (${track.name})")
+                                        return@TrackItemRow
+                                    }
                                     onSelectTrack(track)
                                     onDismiss()
                                 },
@@ -189,11 +194,15 @@ internal fun TrackSelectionDialog(
 private fun TrackItemRow(
     title: String,
     subtitle: String? = null,
+    isSupported: Boolean = true,
     isSelected: Boolean,
     onClick: () -> Unit,
 ) {
-    val activeBg = if (isSelected) Color(0x334CAF50) else Color(0x11FFFFFF)
-    val activeBorder = if (isSelected) Color(0xFF81C784) else Color.Transparent
+    val activeBg = when {
+        isSelected -> Color(0x334CAF50)
+        !isSupported -> Color(0x0AFFFFFF)
+        else -> Color(0x11FFFFFF)
+    }
 
     Surface(
         onClick = onClick,
@@ -214,20 +223,50 @@ private fun TrackItemRow(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.Center,
             ) {
-                Text(
-                    text = title,
-                    fontSize = 15.sp,
-                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                    color = if (isSelected) Color(0xFF81C784) else Color.White,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = title,
+                        fontSize = 15.sp,
+                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                        color = when {
+                            isSelected -> Color(0xFF81C784)
+                            !isSupported -> Color.White.copy(alpha = 0.45f)
+                            else -> Color.White
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+
+                    if (!isSupported) {
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = Color(0x26FF5252),
+                        ) {
+                            Text(
+                                text = "设备不支持",
+                                color = Color(0xFFFF6D6D),
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.5.dp),
+                            )
+                        }
+                    }
+                }
+
                 if (!subtitle.isNullOrBlank()) {
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = subtitle,
                         fontSize = 12.5.sp,
-                        color = if (isSelected) Color(0xFF81C784).copy(alpha = 0.8f) else Color.White.copy(alpha = 0.6f),
+                        color = when {
+                            isSelected -> Color(0xFF81C784).copy(alpha = 0.8f)
+                            !isSupported -> Color.White.copy(alpha = 0.35f)
+                            else -> Color.White.copy(alpha = 0.6f)
+                        },
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )

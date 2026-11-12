@@ -5,8 +5,12 @@ import com.mewbox.tv.api.tmdb.TmdbClient
 import com.mewbox.tv.api.tmdb.TmdbRepository
 import com.mewbox.tv.api.tmdb.bean.TmdbDetail
 import com.mewbox.tv.api.tmdb.bean.TmdbMedia
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import timber.log.Timber
 import javax.inject.Inject
 
@@ -19,45 +23,120 @@ class DetailTmdbCoordinator @Inject constructor(
     private val tmdbRepository: TmdbRepository,
 ) {
 
+    companion object {
+        /** searchMulti 的预算：弹窗实测约 3s 返回，留足代理/弱网余量，避免静默超时 */
+        private const val SEARCH_TIMEOUT_MS = 10_000L
+    }
+
     /**
-     * 异步拉取 TMDB 海报、Logo、评分与演职员信息
+     * 异步两段式拉取 TMDB 海报、Logo、评分与演职员信息
+     * @param onQuick 第一段：轻量搜索命中后立即回调海报与横版背景图
+     * @param onLoaded 第二段：完整大 JSON 加载完成，回填评分、简介、Logo 与演职员
      */
     fun loadTmdbInfo(
         scope: CoroutineScope,
         vodName: String,
         onLoaded: (detail: TmdbDetail, imageBase: String) -> Unit,
-    ) {
-        scope.launch {
-            try {
-                val config = tmdbRepository.getTmdbConfig()
-                if (!config.enable || config.apiKey.isBlank()) return@launch
+        onQuick: ((poster: String?, backdrop: String?) -> Unit)? = null,
+    ): Job = scope.launch {
+        try {
+            Timber.i("TMDB 自动匹配启动: $vodName")
+            val config = tmdbRepository.getTmdbConfig()
+            Timber.i("TMDB 配置读取完成: enable=${config.enable}")
+            if (!config.enable || config.apiKey.isBlank()) {
+                Timber.d("TMDB 未启用或未配置 Key，跳过: $vodName")
+                return@launch
+            }
 
-                val cleaned = TmdbClient.cleanTitle(vodName)
-                if (cleaned.isBlank()) return@launch
+            val cleaned = TmdbClient.cleanTitle(vodName)
+            if (cleaned.isBlank()) {
+                Timber.d("TMDB 片名清洗后为空，跳过: $vodName")
+                return@launch
+            }
 
-                val cached = tmdbCache.getDetailByTitle(cleaned)
-                if (cached != null) {
-                    onLoaded(cached, config.imageBase)
+            val cached = tmdbCache.getDetailByTitle(cleaned)
+            if (cached != null) {
+                Timber.i("TMDB 缓存命中: $cleaned")
+                onLoaded(cached, config.imageBase)
+                return@launch
+            }
+
+            if (tmdbCache.isNegative(cleaned)) {
+                Timber.d("TMDB 负缓存命中，跳过搜索: $cleaned")
+                return@launch
+            }
+            Timber.i("TMDB 开始 searchMulti: $cleaned")
+
+            // 第一段：带超时的 searchMulti。超时属于「本次没拿到结果」而非「TMDB 无收录」，
+            // 必须与外部取消区分开：超时要留日志、且绝不写负缓存，下次进详情页还能重试。
+            val searchResult = runCatching {
+                withTimeout(SEARCH_TIMEOUT_MS) { tmdbClient.searchMulti(cleaned) }
+            }.getOrElse { e ->
+                when (e) {
+                    is TimeoutCancellationException -> {
+                        Timber.w("TMDB searchMulti 超时(${SEARCH_TIMEOUT_MS}ms): $cleaned（不打负缓存，下次进入可重试）")
+                        return@launch
+                    }
+                    is CancellationException -> throw e
+                    else -> {
+                        Timber.w(e, "TMDB searchMulti 失败: $cleaned")
+                        return@launch
+                    }
+                }
+            }
+
+            val searchRes = searchResult.getOrNull()
+            if (searchRes == null) {
+                // 网络或 HTTP 错误，绝不打负缓存
+                Timber.w("TMDB searchMulti 返回错误: $cleaned")
+                return@launch
+            }
+
+            // 严格匹配优先；未命中不代表无收录 —— 译名差异（站源译名 vs TMDB 中文名）会让它返回 null，
+            // 此时改用候选列表兜底，只有接口明确「零候选」才写负缓存。
+            var best = TmdbClient.pickBestMatch(cleaned, searchRes)
+            var isFallback = false
+            if (best == null) {
+                val candidates = searchRes.results.filter { it.mediaType != "person" }
+                if (candidates.isEmpty()) {
+                    Timber.i("TMDB 接口返回零候选，写入负缓存: $cleaned")
+                    tmdbCache.markNegative(cleaned)
                     return@launch
                 }
-
-                if (tmdbCache.isNegative(cleaned)) return@launch
-
-                val searchRes = tmdbClient.searchMulti(cleaned).getOrNull()
-                val best = TmdbClient.pickBestMatch(cleaned, searchRes)
-                if (best != null) {
-                    val detail = tmdbClient.fetchDetail(best.mediaType, best.id).getOrNull()
-                    if (detail != null) {
-                        tmdbCache.putDetailByTitle(cleaned, detail)
-                        tmdbCache.putDetail(best.mediaType, best.id, detail)
-                        onLoaded(detail, config.imageBase)
-                    }
-                } else {
-                    tmdbCache.markNegative(cleaned)
+                best = TmdbClient.pickFallbackMatch(cleaned, searchRes)
+                if (best == null) {
+                    Timber.i("TMDB 候选均不可用，保留站源海报: $cleaned")
+                    return@launch
                 }
-            } catch (e: Exception) {
-                Timber.w(e, "获取 TMDB 增强信息失败: $vodName")
+                isFallback = true
             }
+            val chosen = best ?: return@launch
+            if (isFallback) {
+                Timber.i("TMDB 严格匹配未命中，采用兜底候选: $cleaned -> ${chosen.displayTitle} (id=${chosen.id}, ${chosen.mediaType})")
+            }
+
+            // 第一段出图：backdrop 与 poster 尺寸与后续保持统一（w1280 / w780）
+            onQuick?.invoke(
+                TmdbClient.imageUrl(config.imageBase, chosen.posterPath, "w780").ifEmpty { null },
+                TmdbClient.imageUrl(config.imageBase, chosen.backdropPath, "w1280").ifEmpty { null },
+            )
+
+            // 第二段：后台补齐评分、演职员、多图等元数据
+            val detail = tmdbClient.fetchDetail(chosen.mediaType, chosen.id).getOrNull()
+            if (detail != null) {
+                tmdbCache.putDetailByTitle(cleaned, detail)
+                tmdbCache.putDetail(chosen.mediaType, chosen.id, detail)
+                onLoaded(detail, config.imageBase)
+            } else {
+                Timber.w("TMDB fetchDetail 失败: ${chosen.mediaType}/${chosen.id} ($cleaned)")
+            }
+        } catch (e: CancellationException) {
+            Timber.i("TMDB 协程被取消: $vodName")
+            throw e
+        } catch (e: Exception) {
+            Timber.w(e, "获取 TMDB 增强信息失败: $vodName")
+        } finally {
+            Timber.i("TMDB 协程结束: $vodName")
         }
     }
 

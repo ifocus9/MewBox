@@ -55,6 +55,8 @@ fun DetailContent(
     onSelectEpisode: (Episode) -> Unit,
     onSelectFlag: (Flag) -> Unit,
     onSelectSource: (Vod) -> Unit,
+    quickBackdrop: String? = null,
+    quickPoster: String? = null,
     onTitleLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -74,6 +76,8 @@ fun DetailContent(
                 tmdbImageBase = tmdbImageBase,
                 resumeEpisodeText = resumeEpisodeText,
                 onPlay = onPlay,
+                quickBackdrop = quickBackdrop,
+                quickPoster = quickPoster,
                 onTitleLongClick = onTitleLongClick,
             )
         }

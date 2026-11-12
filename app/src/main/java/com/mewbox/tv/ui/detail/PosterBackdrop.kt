@@ -17,6 +17,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import com.mewbox.tv.api.tmdb.TmdbClient
 
 private const val BackdropScale = 1.3f
 private val BackdropBlurRadius = 40.dp
@@ -33,18 +34,26 @@ fun PosterBackdrop(
     onImage: ((coil3.Image) -> Unit)? = null,
 ) {
     Box(modifier = modifier.fillMaxSize()) {
+        var currentPic by remember(pic) { mutableStateOf(pic) }
+        var hasFallenBack by remember(pic) { mutableStateOf(false) }
         var loadFailed by remember(pic) { mutableStateOf(false) }
 
-        if (!pic.isNullOrEmpty() && !loadFailed) {
+        if (!currentPic.isNullOrEmpty() && !loadFailed) {
             AsyncImage(
-                model = pic,
+                model = currentPic,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 onState = { state ->
                     if (state is coil3.compose.AsyncImagePainter.State.Success) {
                         onImage?.invoke(state.result.image)
                     } else if (state is coil3.compose.AsyncImagePainter.State.Error) {
-                        loadFailed = true
+                        val fallback = currentPic?.let { TmdbClient.resolveFallbackImageUrl(it) }
+                        if (!hasFallenBack && fallback != null && fallback != currentPic) {
+                            hasFallenBack = true
+                            currentPic = fallback
+                        } else {
+                            loadFailed = true
+                        }
                     }
                 },
                 modifier = Modifier
@@ -57,7 +66,7 @@ fun PosterBackdrop(
             )
         }
 
-        if (pic.isNullOrEmpty() || loadFailed) {
+        if (currentPic.isNullOrEmpty() || loadFailed) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()

@@ -27,18 +27,25 @@ class TmdbRepository @Inject constructor(
     private val keyApiBase = stringPreferencesKey("tmdb_api_base")
     private val keyImageBase = stringPreferencesKey("tmdb_image_base")
 
+    @Volatile
+    private var memoryCachedConfig: TmdbConfig? = null
+
     val tmdbConfigFlow: Flow<TmdbConfig> = context.tmdbDataStore.data.map { prefs ->
         TmdbConfig(
             enable = prefs[keyEnable] ?: false,
             apiKey = prefs[keyApiKey].orEmpty(),
             apiBase = prefs[keyApiBase].orEmpty(),
             imageBase = prefs[keyImageBase].orEmpty(),
-        )
+        ).also { memoryCachedConfig = it }
     }
 
-    suspend fun getTmdbConfig(): TmdbConfig = tmdbConfigFlow.first()
+    suspend fun getTmdbConfig(): TmdbConfig {
+        memoryCachedConfig?.let { return it }
+        return tmdbConfigFlow.first().also { memoryCachedConfig = it }
+    }
 
     suspend fun save(config: TmdbConfig) {
+        memoryCachedConfig = config
         context.tmdbDataStore.edit { prefs ->
             prefs[keyEnable] = config.enable
             prefs[keyApiKey] = config.apiKey.trim()
@@ -48,6 +55,7 @@ class TmdbRepository @Inject constructor(
     }
 
     suspend fun setEnable(enable: Boolean) {
+        memoryCachedConfig = memoryCachedConfig?.copy(enable = enable)
         context.tmdbDataStore.edit { prefs ->
             prefs[keyEnable] = enable
         }

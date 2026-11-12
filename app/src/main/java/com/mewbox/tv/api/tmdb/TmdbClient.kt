@@ -239,6 +239,20 @@ class TmdbClient @Inject constructor(
         }
 
         /**
+         * 若图片使用官方默认域名且遇到加载失败，获取备用官方 CDN 域名进行容错重试；
+         * 若用户配置了自定义代理或非官方 CDN，则返回 null，不进行覆盖
+         */
+        fun resolveFallbackImageUrl(url: String): String? {
+            return when {
+                url.startsWith("https://image.tmdb.org/") ->
+                    url.replaceFirst("https://image.tmdb.org/", "https://images.tmdb.org/")
+                url.startsWith("https://images.tmdb.org/") ->
+                    url.replaceFirst("https://images.tmdb.org/", "https://image.tmdb.org/")
+                else -> null
+            }
+        }
+
+        /**
          * 判断是否为 TMDB v4 读访问令牌（Read Access Token）
          */
         fun isBearerToken(keyOrToken: String?): Boolean {
@@ -302,7 +316,8 @@ class TmdbClient @Inject constructor(
         }
 
         /**
-         * 从结果列表中挑选最匹配的一条
+         * 从结果列表中挑选最匹配的一条（严格模式）
+         * 用于自动匹配的第一选择；未过阈值时应改用 [pickFallbackMatch] 而不是直接判定「无匹配」。
          */
         fun pickBestMatch(rawTitle: String, result: TmdbResult?): TmdbMedia? {
             if (result == null || result.results.isEmpty()) return null
@@ -326,6 +341,43 @@ class TmdbClient @Inject constructor(
                 }
             }
             return if (bestScore > 0.2) best else null
+        }
+
+        /**
+         * 兜底匹配：站源译名与 TMDB 中文名差异较大（如「野兽赛跑」vs「残酷兽竞」）时，
+         * 严格模式会以 0 相似度被判为无匹配，但 search/multi 其实已按相关度返回了正确结果。
+         * 本方法不设相似度硬阈值，按「标题弱相似 + 是否有可用图片 + 热度/投票数」挑一条最优候选，
+         * 让详情页至少能拿到 TMDB 海报与元数据，用户仍可通过编辑弹窗手动修正。
+         */
+        fun pickFallbackMatch(rawTitle: String, result: TmdbResult?): TmdbMedia? {
+            if (result == null || result.results.isEmpty()) return null
+            val cleaned = cleanTitle(rawTitle).lowercase()
+            var best: TmdbMedia? = null
+            var bestScore = -1.0
+
+            for (m in result.results) {
+                if ("person" == m.mediaType) continue
+                val mTitle = m.displayTitle.lowercase()
+                val mOrig = (m.originalTitle ?: "").lowercase()
+                val mOrigName = (m.originalName ?: "").lowercase()
+                if (mTitle.isEmpty() && mOrig.isEmpty() && mOrigName.isEmpty()) continue
+
+                val maxSim = maxOf(
+                    stringSimilarity(cleaned, mTitle),
+                    stringSimilarity(cleaned, mOrig),
+                    stringSimilarity(cleaned, mOrigName),
+                )
+                val hasImage = !m.posterPath.isNullOrEmpty() || !m.backdropPath.isNullOrEmpty()
+                val score = maxSim * 0.6 +
+                    (if (hasImage) 0.25 else 0.0) +
+                    minOf(m.popularity / 200.0, 1.0) * 0.1 +
+                    minOf(m.voteCount / 5000.0, 1.0) * 0.05
+                if (score > bestScore) {
+                    bestScore = score
+                    best = m
+                }
+            }
+            return best
         }
 
         private fun stringSimilarity(a: String?, b: String?): Double {

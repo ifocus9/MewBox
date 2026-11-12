@@ -2,6 +2,7 @@ package com.mewbox.tv.di
 
 import android.content.Context
 import androidx.room.Room
+import com.mewbox.tv.api.douban.DoubanApi
 import com.mewbox.tv.api.net.HostInterceptor
 import com.mewbox.tv.api.net.HostMapping
 import com.mewbox.tv.api.net.SSLCompat
@@ -11,6 +12,7 @@ import com.mewbox.tv.db.AppDatabase
 import com.mewbox.tv.db.ConfigDao
 import com.mewbox.tv.db.HistoryDao
 import com.mewbox.tv.db.SiteDao
+import com.mewbox.tv.db.TrackDao
 import com.mewbox.tv.engine.nodejs.NodeSpiderLoader
 import com.mewbox.tv.engine.t4.T4SpiderLoader
 import dagger.Binds
@@ -65,6 +67,23 @@ object NetworkModule {
             .readTimeout(30, TimeUnit.SECONDS)
             .build()
 
+    /** 豆瓣 Frodo 专用：固定公网 HTTPS 走标准 TLS（禁止套用源 API 的 SSLCompat 信任所有证书），
+     * 统一注入 Frodo App UA。图片防盗链 Referer 由卡片 ImageRequest 单独注入，不经此 client。
+     */
+    @Provides @Singleton @Named("douban")
+    fun doubanClient(): OkHttpClient =
+        OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                chain.proceed(
+                    chain.request().newBuilder()
+                        .header("User-Agent", DoubanApi.FRODO_UA)
+                        .build(),
+                )
+            }
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS)
+            .build()
+
     @Provides @Singleton
     fun retrofit(@Named("api") client: OkHttpClient): Retrofit =
         Retrofit.Builder().baseUrl("http://localhost/").client(client).build()
@@ -84,6 +103,8 @@ object DatabaseModule {
                 AppDatabase.MIGRATION_2_3,
                 AppDatabase.MIGRATION_3_4,
                 AppDatabase.MIGRATION_4_5,
+                AppDatabase.MIGRATION_5_6,
+                AppDatabase.MIGRATION_6_7,
             )
             .fallbackToDestructiveMigration()
             .build()
@@ -91,6 +112,7 @@ object DatabaseModule {
     @Provides fun siteDao(db: AppDatabase): SiteDao = db.siteDao()
     @Provides fun configDao(db: AppDatabase): ConfigDao = db.configDao()
     @Provides fun historyDao(db: AppDatabase): HistoryDao = db.historyDao()
+    @Provides fun trackDao(db: AppDatabase): TrackDao = db.trackDao()
 }
 
 /** 引擎注册：新增 Node.js / QuickJS 引擎时只需在此再加一个 @IntoSet 绑定。 */

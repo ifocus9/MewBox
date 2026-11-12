@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mewbox.tv.bean.Vod
+import com.mewbox.tv.player.PlayerTrack
 import com.mewbox.tv.ui.player.FullScreenEpisodeDrawer
 import com.mewbox.tv.ui.player.PlayerToastPill
 import com.mewbox.tv.ui.player.PlayerWindowEffects
@@ -144,6 +145,9 @@ fun DirectPlayScreen(
                 onResetOpening = { viewModel.resetOpening() },
                 onSetEnding = { viewModel.setEnding() },
                 onResetEnding = { viewModel.resetEnding() },
+                onSelectTrack = { viewModel.selectTrack(it) },
+                onDisableTrack = { viewModel.setTrackTypeDisabled(it, true) },
+                onResetToDefault = { viewModel.resetTrackTypeToDefault(it) },
                 modifier = Modifier.fillMaxSize(),
             )
 

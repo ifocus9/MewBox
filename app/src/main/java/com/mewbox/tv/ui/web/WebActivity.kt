@@ -17,7 +17,6 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
@@ -71,6 +70,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.mewbox.tv.bean.WebOptions
 import com.mewbox.tv.ui.theme.MewBoxTheme
+import com.mewbox.tv.util.AppToast
 import timber.log.Timber
 
 /**
@@ -137,7 +137,7 @@ class WebActivity : ComponentActivity() {
             val web = webViewRef ?: return
             if (webOptions.hasCookies() && isCookieComplete(webOptions, web.url.orEmpty())) {
                 CookieManager.getInstance().flush()
-                Toast.makeText(this@WebActivity, "登录认证成功", Toast.LENGTH_SHORT).show()
+                AppToast.show("登录认证成功")
                 finish()
                 return
             }
@@ -163,7 +163,7 @@ class WebActivity : ComponentActivity() {
         val rawOpt = intent.getStringExtra(EXTRA_OPTIONS).orEmpty()
         webOptions = WebOptions.fromJsonString(rawOpt)
         if (!webOptions.isValid()) {
-            Toast.makeText(this, "无效的网页链接", Toast.LENGTH_SHORT).show()
+            AppToast.show("无效的网页链接")
             finish()
             return
         }
@@ -249,11 +249,12 @@ private fun WebScreen(
         }
     }
 
-    Surface(
-        modifier = Modifier.fillMaxSize(),
-        color = MaterialTheme.colorScheme.background,
-    ) {
-        Column(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.background,
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
             // 顶部导航栏
             Surface(
                 modifier = Modifier.fillMaxWidth(),
@@ -493,6 +494,7 @@ private fun WebScreen(
                 )
             }
         }
+    }
     }
 
     DisposableEffect(Unit) {

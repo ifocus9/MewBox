@@ -4,7 +4,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.webkit.WebSettings
-import android.widget.Toast
+import com.mewbox.tv.util.AppToast
 import com.mewbox.tv.api.parser.ResultParser
 import com.mewbox.tv.bean.WebOptions
 import com.mewbox.tv.ui.web.WebActivity
@@ -45,7 +45,9 @@ import javax.inject.Singleton
 @Singleton
 class LocalMessageBridge @Inject constructor(
     @ApplicationContext private val context: Context,
+    private val webResourceGateway: WebResourceGateway,
 ) {
+    constructor(context: Context) : this(context, WebResourceGateway(okhttp3.OkHttpClient()))
     companion object {
         const val DEFAULT_PORT = 9977
         private const val MAX_BODY_BYTES = 4 * 1024 * 1024
@@ -139,7 +141,9 @@ class LocalMessageBridge @Inject constructor(
                 val parts = requestLine.split(" ")
                 if (parts.size < 2) return@use
                 val method = parts[0].uppercase()
-                val path = parts[1].substringBefore('?')
+                val fullUri = parts[1]
+                val path = fullUri.substringBefore('?')
+                val rawQuery = fullUri.substringAfter('?', "")
 
                 val headers = HashMap<String, String>()
                 var line = reader.readLine()
@@ -151,6 +155,25 @@ class LocalMessageBridge @Inject constructor(
                         headers[key] = value
                     }
                     line = reader.readLine()
+                }
+
+                if (path == WebResourceGateway.PATH) {
+                    s.soTimeout = 60_000
+                    val contentLength = headers["content-length"]?.toIntOrNull() ?: 0
+                    val bodyBytes = if (contentLength in 1..MAX_BODY_BYTES) {
+                        val charArray = CharArray(contentLength)
+                        var read = 0
+                        while (read < contentLength) {
+                            val count = reader.read(charArray, read, contentLength - read)
+                            if (count == -1) break
+                            read += count
+                        }
+                        String(charArray, 0, read).toByteArray(StandardCharsets.UTF_8)
+                    } else {
+                        null
+                    }
+                    webResourceGateway.handle(method, rawQuery, headers, bodyBytes, output)
+                    return@use
                 }
 
                 if (method != "POST" || path != "/msg") {
@@ -234,9 +257,7 @@ class LocalMessageBridge @Inject constructor(
                 val optObj = opt as? JsonObject
                 val message = (optObj?.get("message") as? JsonPrimitive)?.content.orEmpty()
                 if (message.isNotBlank()) {
-                    mainHandler.post {
-                        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-                    }
+                    AppToast.show(message)
                 }
                 SUCCESS_JSON
             }

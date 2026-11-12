@@ -249,9 +249,10 @@ class HomeViewModel @Inject constructor(
                         // 拉取失败或确实为空：保留原有列表，仅提示，避免刷成一片空白
                         _uiState.update { it.copy(message = "刷新失败，请检查网络或站点") }
                     } else {
+                        val deduplicated = res.list.distinctBy { item -> "${item.siteKey.ifEmpty { site.key }}_${item.vodId}" }
                         _uiState.update {
                             it.copy(
-                                items = res.list,
+                                items = deduplicated,
                                 page = res.page.coerceAtLeast(1),
                                 pageCount = res.pageCount.coerceAtLeast(1),
                                 error = null,
@@ -261,15 +262,16 @@ class HomeViewModel @Inject constructor(
                         cacheCategory(
                             site.key,
                             targetClassId,
-                            res.list,
+                            deduplicated,
                             res.page.coerceAtLeast(1),
                             res.pageCount.coerceAtLeast(1),
                         )
                     }
                 } else if (home.list.isNotEmpty()) {
                     // 无分类的站点，直接用 homeContent 返回的推荐列表
+                    val deduplicated = home.list.distinctBy { item -> "${item.siteKey.ifEmpty { site.key }}_${item.vodId}" }
                     _uiState.update {
-                        it.copy(items = home.list, page = 1, pageCount = 1)
+                        it.copy(items = deduplicated, page = 1, pageCount = 1)
                     }
                 }
             } catch (e: CancellationException) {
@@ -298,7 +300,8 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val count = vodConfig.import(url)
-                _uiState.update { it.copy(message = "订阅切换成功（共 $count 个站点）") }
+                val msg = if (count == 0) "已切换至网页订阅源" else "订阅切换成功（共 $count 个站点）"
+                _uiState.update { it.copy(message = msg) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -346,10 +349,11 @@ class HomeViewModel @Inject constructor(
             }
             try {
                 val count = vodConfig.reload()
+                val msg = if (count == 0) "网页订阅源已刷新" else "订阅刷新成功（共 $count 个站点）"
                 _uiState.update {
                     it.copy(
                         isRefreshingSubscription = false,
-                        message = "订阅刷新成功（共 $count 个站点）",
+                        message = msg,
                     )
                 }
             } catch (e: Exception) {
@@ -422,9 +426,10 @@ class HomeViewModel @Inject constructor(
                 loadCategory(site, firstClassId, page = 1)
             } else if (res.list.isNotEmpty()) {
                 // 部分站点直接在 homeContent 返回推荐视频
+                val deduplicated = res.list.distinctBy { item -> "${item.siteKey.ifEmpty { site.key }}_${item.vodId}" }
                 _uiState.update {
                     it.copy(
-                        items = res.list,
+                        items = deduplicated,
                         isLoading = false,
                     )
                 }
@@ -460,11 +465,13 @@ class HomeViewModel @Inject constructor(
                 )
             }
         } else {
+            val combined = if (isFirst) res.list else (_uiState.value.items + res.list)
+            val deduplicated = combined.distinctBy { item -> "${item.siteKey.ifEmpty { site.key }}_${item.vodId}" }
             _uiState.update {
                 it.copy(
                     isLoading = false,
                     isLoadingMore = false,
-                    items = if (isFirst) res.list else (it.items + res.list).distinctBy { item -> "${item.siteKey}_${item.vodId}" },
+                    items = deduplicated,
                     page = res.page.coerceAtLeast(page),
                     pageCount = res.pageCount.coerceAtLeast(1),
                 )

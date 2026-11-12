@@ -41,12 +41,21 @@ data class Config(
     val name: String = "",
     val home: String = "",
     val updatedAt: Long = System.currentTimeMillis(),
+    /** 0 = 普通 VOD 订阅源；1 = HTML 网页源 */
+    val type: Int = TYPE_VOD,
 ) {
     /** 展示名：未设置名称时回退到订阅链接 */
     val desc: String
         get() = name.ifBlank { url }
 
+    /** 是否为 HTML 网页订阅源 */
+    val isHtml: Boolean
+        get() = type == TYPE_HTML
+
     companion object {
+        const val TYPE_VOD = 0
+        const val TYPE_HTML = 1
+
         /** 早期版本自动生成的「订阅 N」占位名，一律视为“未设置名称” */
         fun isAutoName(value: String): Boolean {
             val text = value.trim()

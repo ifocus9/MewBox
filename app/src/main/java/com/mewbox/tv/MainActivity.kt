@@ -2,7 +2,6 @@ package com.mewbox.tv
 
 import android.net.Uri
 import android.os.Bundle
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
@@ -92,6 +91,7 @@ import androidx.navigation.navDeepLink
 import com.kyant.backdrop.backdrops.LayerBackdrop
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import com.mewbox.tv.api.config.VodConfig
 import com.mewbox.tv.bean.Vod
 import com.mewbox.tv.domain.SiteRepository
 import com.mewbox.tv.engine.nodejs.NodeBootStage
@@ -108,6 +108,9 @@ import com.mewbox.tv.ui.search.SearchScreen
 import com.mewbox.tv.ui.setting.SettingsScreen
 import com.mewbox.tv.ui.theme.LiquidGlassDefaults
 import com.mewbox.tv.ui.theme.MewBoxTheme
+import com.mewbox.tv.ui.web.fm.HtmlSourceScreen
+import com.mewbox.tv.ui.web.fm.HtmlWebController
+import com.mewbox.tv.util.AppToast
 import dagger.hilt.android.AndroidEntryPoint
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
@@ -126,6 +129,8 @@ class MainActivity : ComponentActivity() {
 
     @Inject lateinit var nodeRuntime: NodeRuntime
     @Inject lateinit var siteRepository: SiteRepository
+    @Inject lateinit var vodConfig: VodConfig
+    @Inject lateinit var htmlWebController: HtmlWebController
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -142,7 +147,11 @@ class MainActivity : ComponentActivity() {
         )
         setContent {
             MewBoxTheme(darkTheme = false) {
-                MainScreen(nodeRuntime = nodeRuntime, onSiteAction = ::runSiteAction)
+                MainScreen(
+                    nodeRuntime = nodeRuntime,
+                    vodConfig = vodConfig,
+                    onSiteAction = ::runSiteAction,
+                )
             }
         }
     }
@@ -158,19 +167,27 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             val site = siteRepository.getSite(siteKey)
             if (site == null) {
-                Toast.makeText(this@MainActivity, "站点不存在或已删除", Toast.LENGTH_SHORT).show()
+                AppToast.show("站点不存在或已删除")
                 return@launch
             }
             val result = siteRepository.action(site, action)
             if (result.msg.isNotBlank()) {
-                Toast.makeText(this@MainActivity, result.msg, Toast.LENGTH_SHORT).show()
+                AppToast.show(result.msg)
             }
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        lifecycleScope.launch {
+            nodeRuntime.warmUpIfNecessary()
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         if (isFinishing) {
+            htmlWebController.destroyWebView()
             nodeRuntime.clear()
         }
     }
@@ -179,24 +196,28 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun MainScreen(
     nodeRuntime: NodeRuntime,
+    vodConfig: VodConfig,
     onSiteAction: (siteKey: String, action: String) -> Unit,
 ) {
     val nav = rememberNavController()
     val context = LocalContext.current
+    val activeConfig by vodConfig.observeActiveConfig().collectAsStateWithLifecycle(initialValue = null)
 
-    // Node.js 源的加载进度：全程只保留一个提示，文案原地更新，避免连续 Toast 闪动
+    // Node.js 源与订阅导入的加载进度：全程只保留一个提示，文案原地更新，避免连续 Toast 闪动
     val nodeLoadingText by nodeRuntime.loading.collectAsStateWithLifecycle()
+    val importingText by vodConfig.importingText.collectAsStateWithLifecycle()
+    val globalLoadingText = nodeLoadingText ?: importingText
     LaunchedEffect(nodeRuntime) {
         nodeRuntime.results.collect { event ->
-            val duration = if (event.stage == NodeBootStage.FAILED) Toast.LENGTH_LONG else Toast.LENGTH_SHORT
-            Toast.makeText(context, event.message, duration).show()
+            val isLong = event.stage == NodeBootStage.FAILED
+            AppToast.show(event.message, isLong = isLong)
         }
     }
 
     // Node.js 加载浮层展示期间：系统返回打断后台加载（远端订阅卡住时可手动中断换源），不触发页面级返回
     BackHandler(enabled = nodeLoadingText != null) {
         nodeRuntime.cancelLoading()
-        Toast.makeText(context, "已打断加载，可切换其他订阅源", Toast.LENGTH_SHORT).show()
+        AppToast.show("已打断加载，可切换其他订阅源")
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -257,11 +278,28 @@ private fun MainScreen(
                         } else null
                     },
                 ) {
-                    MainTabScreen(
-                        onNavigateToDetail = navigateToDetail,
-                        onNavigateToSearch = navigateToSearch,
-                        onNavigateToPlayFromHistory = navigateToPlayFromHistory,
-                    )
+                    if (activeConfig?.isHtml == true) {
+                        HtmlSourceScreen(
+                            onNavigateToPlay = navigateToPlayFromHistory,
+                            onNavigateToDetail = navigateToDetail,
+                            onNavigateToSearch = navigateToSearch,
+                            onNavigateToSettings = { nav.navigate("settings") },
+                        )
+                    } else {
+                        MainTabScreen(
+                            onNavigateToDetail = navigateToDetail,
+                            onNavigateToSearch = navigateToSearch,
+                            onNavigateToPlayFromHistory = navigateToPlayFromHistory,
+                        )
+                    }
+                }
+                composable(route = "settings") {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        BackHandler { nav.popBackStack() }
+                        SettingsScreen(
+                            onSwitchToHome = { nav.popBackStack("main", inclusive = false) },
+                        )
+                    }
                 }
                 composable(
                     route = "search?keyword={keyword}",
@@ -336,9 +374,8 @@ private fun MainScreen(
             }
         }
 
-        // Node.js 下载 / 启动进度：轻压暗遮罩 + 居中白色圆角卡片，盖在整个界面之上（含底部 Tab）
-        // 遮罩吞掉触摸：资源包替换 / 服务重启期间界面处于半可用状态，避免误操作
-        NodeLoadingOverlay(text = nodeLoadingText)
+        // Node.js 下载 / 启动进度与订阅连接探测进度：轻压暗遮罩 + 居中白色圆角卡片，盖在整个界面之上（含底部 Tab）
+        NodeLoadingOverlay(text = globalLoadingText)
     }
 }
 
@@ -428,6 +465,8 @@ private fun nodeLoadingHint(text: String): String = when {
     text.contains("下载") -> "正在下载资源包"
     text.contains("重启") -> "正在应用新版本并重启服务"
     text.contains("启动") -> "正在启动本地服务"
+    text.contains("连接") || text.contains("导入") -> "正在获取并识别订阅内容"
+    text.contains("网页") -> "正在加载网页资源"
     else -> "请稍候"
 }
 
@@ -442,6 +481,7 @@ private fun MainTabScreen(
 ) {
     val pagerState = rememberPagerState(pageCount = { Tab.entries.size })
     val scope = rememberCoroutineScope()
+    var isChildListScrolling by remember { mutableStateOf(false) }
 
     // 预热 pager 布局与着色器（参考 AVBox 抹平初次点击/滑动的卡顿）
     LaunchedEffect(pagerState) {
@@ -473,9 +513,9 @@ private fun MainTabScreen(
         }
     }
 
-    // 关键优化（对齐 AVBox）：在滑动翻页或切 Tab 动画期间暂停 Backdrop 图层重录制，避免满载掉帧
+    // 关键优化（对齐 AVBox）：在滑动翻页、切 Tab 动画或子列表竖向高速滑动期间暂停 Backdrop 图层重录制，避免满载掉帧
     val pauseGlassRecording: () -> Boolean = remember(pagerState) {
-        { pagerState.isScrollInProgress }
+        { pagerState.isScrollInProgress || isChildListScrolling }
     }
 
     val selectTab: (Int) -> Unit = { index ->
@@ -509,9 +549,13 @@ private fun MainTabScreen(
                         Tab.Home -> HomeScreen(
                             onNavigateToDetail = onNavigateToDetail,
                             onNavigateToSearch = onNavigateToSearch,
+                            onScrollInProgressChange = { isScrolling ->
+                                isChildListScrolling = isScrolling
+                            },
                         )
                         Tab.Keep -> HistoryScreen(
                             onNavigateToPlay = onNavigateToPlayFromHistory,
+                            onNavigateToSearch = onNavigateToSearch,
                         )
                         Tab.Settings -> SettingsScreen(
                             // 切换订阅源后跳回首页：Node.js 加载 loading 浮层展示在首页上

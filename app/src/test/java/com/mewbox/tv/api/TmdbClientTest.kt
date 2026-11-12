@@ -120,4 +120,42 @@ class TmdbClientTest {
         assertEquals(101, picked!!.id)
         assertEquals("流浪地球2", picked.displayTitle)
     }
+
+    /**
+     * 复现「野兽赛跑」这类站源译名与 TMDB 中文名完全不同的场景：
+     * 严格匹配会被 0.2 阈值判为无匹配，但兜底必须能选出带海报的候选。
+     */
+    @Test
+    fun testPickFallbackMatchForDifferentChineseTitle() {
+        val person = TmdbMedia(id = 1, rawMediaType = "person", name = "某演员", popularity = 900.0)
+        val noImage = TmdbMedia(id = 202, rawMediaType = "movie", title = "无关影片", popularity = 3.0)
+        val matched = TmdbMedia(
+            id = 201,
+            rawMediaType = "movie",
+            title = "残酷兽竞",
+            originalTitle = "Corrida dos Bichos",
+            posterPath = "/poster.jpg",
+            backdropPath = "/backdrop.jpg",
+            popularity = 6.0,
+            voteCount = 120,
+        )
+        val result = TmdbResult(results = listOf(person, matched, noImage))
+
+        assertNull(TmdbClient.pickBestMatch("野兽赛跑", result))
+        val fallback = TmdbClient.pickFallbackMatch("野兽赛跑", result)
+        assertNotNull(fallback)
+        assertEquals(201, fallback!!.id)
+        assertEquals("残酷兽竞", fallback.displayTitle)
+    }
+
+    @Test
+    fun testPickFallbackMatchReturnsNullWhenNoMediaCandidates() {
+        val result = TmdbResult(
+            results = listOf(
+                TmdbMedia(id = 1, rawMediaType = "person", name = "某演员", popularity = 100.0),
+            )
+        )
+        assertNull(TmdbClient.pickFallbackMatch("任意片名", result))
+        assertNull(TmdbClient.pickFallbackMatch("任意片名", TmdbResult()))
+    }
 }

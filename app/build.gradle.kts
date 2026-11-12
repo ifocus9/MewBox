@@ -103,6 +103,10 @@ android {
     testOptions { unitTests.isReturnDefaultValues = true }
 }
 
+composeCompiler {
+    stabilityConfigurationFiles.add(project.layout.projectDirectory.file("compose_compiler_config.conf"))
+}
+
 androidComponents {
     onVariants { variant ->
         val timeTag = if (variant.buildType == "debug") "-$buildTimestamp" else ""

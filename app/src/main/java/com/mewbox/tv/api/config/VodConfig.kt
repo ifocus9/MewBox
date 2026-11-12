@@ -13,19 +13,31 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import android.content.Context
+import android.net.Uri
+import dagger.hilt.android.qualifiers.ApplicationContext
+import java.io.File
+import java.io.FileNotFoundException
 import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/** 点播配置总控：拉取 config.json、与本地站点状态合并、维护默认首页源。 */
+/** 点播配置总控：拉取 config.json 或 HTML 网页源、与本地站点状态合并、维护默认首页源。 */
 @Singleton
 class VodConfig @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val service: T4Service,
     private val siteDao: SiteDao,
     private val configDao: ConfigDao,
@@ -33,77 +45,161 @@ class VodConfig @Inject constructor(
     private val router: SpiderRouter,
     private val nodeRuntime: NodeRuntime,
 ) {
+    private val backgroundScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     private val _configReloadFlow = MutableSharedFlow<Long>(replay = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST).apply {
         tryEmit(0L)
     }
     /** 订阅配置刷新/重载通知流 */
     val configReloadFlow: SharedFlow<Long> = _configReloadFlow.asSharedFlow()
 
-    /** 导入订阅：`input` 可以是订阅 URL，也可以是 JSON 文本。返回导入的站点数。 */
+    private val _importingText = MutableStateFlow<String?>(null)
+    /** 普通/HTML 订阅源导入与探测期间的全局加载文案 */
+    val importingText: StateFlow<String?> = _importingText.asStateFlow()
+
+    /** 观察当前激活的订阅记录 */
+    fun observeActiveConfig(): Flow<Config?> =
+        combine(configDao.observeAll(), settings.configUrlFlow) { configs, activeUrl ->
+            val targetUrl = activeUrl.ifBlank { configs.firstOrNull()?.url.orEmpty() }
+            configs.firstOrNull { it.url == targetUrl }
+        }.distinctUntilChanged()
+
+    /** 导入订阅：`input` 可以是订阅 URL（JSON / Node.js / HTML 网页），也可以是 JSON 文本。返回导入的站点数（HTML 源返回 0）。 */
     suspend fun import(input: String, name: String = ""): Int {
         val text = input.trim()
         require(text.isNotEmpty()) { "请输入订阅地址或 JSON" }
         val isJson = text.startsWith("{")
-        // 加载新配置前先清空旧 Spider 实例与 NodeRuntime，避免旧资源与并发干扰
-        router.clear()
+        val isNode = !isJson && nodeRuntime.isConfig(text)
+        val isLocal = !isJson && !isNode && isLocalFile(text)
 
-        val body = when {
-            isJson -> {
-                nodeRuntime.clear()
-                text
-            }
-            nodeRuntime.isConfig(text) -> {
-                val json = nodeRuntime.loadConfig(text)
-                nodeRuntime.accept()
-                json
-            }
-            else -> {
-                nodeRuntime.clear()
-                withContext(Dispatchers.IO) { service.get(text).use { it.string() } }
-            }
-        }
-
-        val incoming = ResultParser.parseSites(body)
-        require(incoming.isNotEmpty()) { "未解析到任何站点（需要包含 sites 数组）" }
-
-        // 查询当前配置记录（如果存在），获取其之前偏好的 home 站点
+        // 若目标地址在本地已确认为 HTML 网页源，直接切换并交给 WebView 加载，无需重复发起阻塞探测请求
         val existingConfig = if (!isJson) configDao.find(text) else null
-        val targetHomeKey = existingConfig?.home.orEmpty()
-
-        val old = siteDao.getAll().associateBy { it.key }
-        val merged = merge(incoming, old)
-
-        // 确定唯一的首页站点：优先匹配该订阅源之前保存的 home 站点，若不存在则取第一个可用站点
-        val homeSite = merged.firstOrNull { it.key == targetHomeKey && it.enabled && !it.hide && router.isSupported(it) }
-            ?: merged.firstOrNull { it.enabled && !it.hide && router.isSupported(it) }
-        val finalHomeKey = homeSite?.key.orEmpty()
-
-        val finalSites = merged.map { site ->
-            site.copy(isHome = (site.key == finalHomeKey))
-        }
-
-        // 事务性原子替换所有站点，确保 Room 只发射一次最终自洽状态
-        siteDao.replaceAll(finalSites)
-
-        if (!isJson) {
+        if (!isJson && !isNode && existingConfig?.isHtml == true) {
+            val finalName = if (name.isNotBlank()) name else existingConfig.name
             settings.setConfigUrl(text)
-            val finalName = when {
-                name.isNotBlank() -> name
-                else -> existingConfig?.name.orEmpty()
-            }
             configDao.insert(
-                Config(
-                    url = text,
+                existingConfig.copy(
                     name = finalName,
-                    home = finalHomeKey,
                     updatedAt = System.currentTimeMillis(),
+                    type = Config.TYPE_HTML,
                 )
             )
+            backgroundScope.launch { ensurePushBackendReady() }
+            _configReloadFlow.tryEmit(System.currentTimeMillis())
+            return 0
         }
 
-        // 发送配置刷新事件，触发首页等页面刷新
-        _configReloadFlow.tryEmit(System.currentTimeMillis())
-        return finalSites.size
+        if (!isNode) {
+            _importingText.value = if (isLocal) "正在读取本地配置…" else "正在连接订阅源…"
+        }
+        try {
+            var contentType = ""
+            val body = when {
+                isJson -> {
+                    router.clear()
+                    nodeRuntime.clear()
+                    text
+                }
+                isNode -> {
+                    router.clear()
+                    val json = nodeRuntime.loadConfig(text)
+                    nodeRuntime.accept()
+                    json
+                }
+                isLocal -> {
+                    router.clear()
+                    nodeRuntime.clear()
+                    if (isHtmlFile(text)) {
+                        contentType = "text/html"
+                    }
+                    withContext(Dispatchers.IO) {
+                        readLocalContent(text)
+                    }
+                }
+                else -> {
+                    withContext(Dispatchers.IO) {
+                        service.get(text).use { rb ->
+                            contentType = rb.contentType()?.toString().orEmpty()
+                            rb.string()
+                        }
+                    }
+                }
+            }
+
+            val incoming = ResultParser.parseSites(body)
+            if (incoming.isEmpty() && !isJson && !isNode && (isHtmlResponse(contentType, body) || isHtmlFile(text))) {
+                val extractedTitle = extractHtmlTitle(body)
+                val finalName = when {
+                    name.isNotBlank() -> name
+                    !existingConfig?.name.isNullOrBlank() -> existingConfig.name
+                    extractedTitle.isNotBlank() -> extractedTitle
+                    else -> ""
+                }
+                // HTML 网页源与底层点播/Node.js 引擎共存：
+                // 保留已有的 siteDao 站点（含 push_agent 推送源）与 NodeRuntime 进程，供网页调用 pan.play / playVod / search
+                settings.setConfigUrl(text)
+                configDao.insert(
+                    Config(
+                        url = text,
+                        name = finalName,
+                        home = "",
+                        updatedAt = System.currentTimeMillis(),
+                        type = Config.TYPE_HTML,
+                    )
+                )
+                backgroundScope.launch { ensurePushBackendReady() }
+                _configReloadFlow.tryEmit(System.currentTimeMillis())
+                return 0
+            }
+            require(incoming.isNotEmpty()) { "未解析到任何站点（需要包含 sites 数组或有效的 HTML 页面）" }
+
+            if (!isJson && !isNode) {
+                router.clear()
+                nodeRuntime.clear()
+            }
+
+            val targetHomeKey = existingConfig?.home.orEmpty()
+
+            val old = siteDao.getAll().associateBy { it.key }
+            val merged = merge(incoming, old)
+
+            // 确定唯一的首页站点：优先匹配该订阅源之前保存的 home 站点，若不存在则取第一个可用站点
+            val homeSite = merged.firstOrNull { it.key == targetHomeKey && it.enabled && !it.hide && router.isSupported(it) }
+                ?: merged.firstOrNull { it.enabled && !it.hide && router.isSupported(it) }
+            val finalHomeKey = homeSite?.key.orEmpty()
+
+            val finalSites = merged.map { site ->
+                site.copy(isHome = (site.key == finalHomeKey))
+            }
+
+            // 事务性原子替换所有站点，确保 Room 只发射一次最终自洽状态
+            siteDao.replaceAll(finalSites)
+
+            if (!isJson) {
+                settings.setConfigUrl(text)
+                val finalName = when {
+                    name.isNotBlank() -> name
+                    else -> existingConfig?.name.orEmpty()
+                }
+                configDao.insert(
+                    Config(
+                        url = text,
+                        name = finalName,
+                        home = finalHomeKey,
+                        updatedAt = System.currentTimeMillis(),
+                        type = Config.TYPE_VOD,
+                    )
+                )
+            }
+
+            // 发送配置刷新事件，触发首页等页面刷新
+            _configReloadFlow.tryEmit(System.currentTimeMillis())
+            return finalSites.size
+        } finally {
+            if (!isNode) {
+                _importingText.value = null
+            }
+        }
     }
 
     /** 重新拉取并刷新当前激活的订阅配置。返回导入/刷新的站点数。 */
@@ -142,6 +238,13 @@ class VodConfig @Inject constructor(
         }
         if (currentUrl.isBlank()) {
             nodeRuntime.clearLoadingForce()
+            return null
+        }
+
+        val currentConfig = configDao.find(currentUrl)
+        if (currentConfig?.isHtml == true) {
+            nodeRuntime.clearLoadingForce()
+            ensurePushBackendReady()
             return null
         }
 
@@ -189,7 +292,165 @@ class VodConfig @Inject constructor(
 
     suspend fun update(site: Site) = siteDao.update(site)
 
+    suspend fun hasPushRuntimeAvailable(): Boolean = withContext(Dispatchers.IO) {
+        if (nodeRuntime.isRunning() || nodeRuntime.hasCachedBundle(null)) return@withContext true
+        configDao.getAll().any { !it.isHtml && nodeRuntime.isConfig(it.url) }
+    }
+
+    /**
+     * 当处于 HTML 网页源（如网盘检索页）时，静默确保底层 Node.js 推送引擎（push_agent）与站点表已就绪：
+     * 1. 若本地存在已保存的 Node.js 订阅记录或缓存包，静默拉起 NodeRuntime，并在 siteDao 缺少 push_agent 时自动同步其 `/config` 站点。
+     * 2. 若无 Node.js 源但存在普通点播订阅记录且 siteDao 为空，静默拉取恢复其站点列表。
+     */
+    suspend fun ensurePushBackendReady() = withContext(Dispatchers.IO) {
+        try {
+            val existingSites = siteDao.getAll()
+            val hasPushSite = existingSites.any { isPushSite(it) }
+            if (nodeRuntime.isRunning() && hasPushSite) return@withContext
+
+            val allConfigs = configDao.getAll()
+            val nodeConfig = allConfigs.firstOrNull { !it.isHtml && nodeRuntime.isConfig(it.url) }
+            if (nodeConfig != null || nodeRuntime.hasCachedBundle(null)) {
+                val targetSource = nodeConfig?.url
+                if (!hasPushSite) {
+                    val json = nodeRuntime.fetchConfigJson(targetSource)
+                    val incoming = ResultParser.parseSites(json.orEmpty())
+                    if (incoming.isNotEmpty()) {
+                        val old = existingSites.associateBy { it.key }
+                        val merged = merge(incoming, old)
+                        val homeSite = merged.firstOrNull { it.enabled && !it.hide && router.isSupported(it) }
+                        val homeKey = homeSite?.key.orEmpty()
+                        siteDao.replaceAll(merged.map { it.copy(isHome = (it.key == homeKey)) })
+                    }
+                } else if (!nodeRuntime.isRunning()) {
+                    nodeRuntime.ensureStarted(source = targetSource, notify = false, showLoading = false)
+                }
+                return@withContext
+            }
+
+            if (existingSites.isEmpty()) {
+                val vodConfig = allConfigs.firstOrNull { !it.isHtml && it.url.isNotBlank() } ?: return@withContext
+                val body = if (isLocalFile(vodConfig.url)) {
+                    readLocalContent(vodConfig.url)
+                } else {
+                    service.get(vodConfig.url).use { it.string() }
+                }
+                val incoming = ResultParser.parseSites(body)
+                if (incoming.isNotEmpty()) {
+                    val homeSite = incoming.firstOrNull { it.enabled && !it.hide && router.isSupported(it) }
+                    val homeKey = homeSite?.key.orEmpty()
+                    siteDao.replaceAll(incoming.map { it.copy(isHome = (it.key == homeKey)) })
+                }
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "HTML 源静默准备底层推送引擎失败")
+        }
+    }
+
+    /** 读取本地订阅文件文本内容（支持 file://、content:// 或本地绝对路径） */
+    private fun readLocalContent(text: String): String {
+        return if (text.startsWith("content://", ignoreCase = true)) {
+            val uri = Uri.parse(text)
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                input.bufferedReader(Charsets.UTF_8).readText()
+            } ?: throw FileNotFoundException("无法打开本地订阅文件: $text")
+        } else {
+            val filePath = if (text.startsWith("file://", ignoreCase = true)) {
+                text.substring(7)
+            } else {
+                text
+            }
+            val file = File(filePath)
+            if (!file.exists()) {
+                throw FileNotFoundException("本地订阅文件不存在: $filePath")
+            }
+            file.readText(Charsets.UTF_8)
+        }
+    }
+
     companion object {
+        const val PUSH_KEY = "push_agent"
+
+        /** 判断指定 URL 是否指向本地文件 */
+        fun isLocalFile(url: String): Boolean {
+            val trimmed = url.trim()
+            return trimmed.startsWith("file://", ignoreCase = true) ||
+                trimmed.startsWith("content://", ignoreCase = true) ||
+                trimmed.startsWith("/")
+        }
+
+        /** 判断指定 URL 是否指向本地 HTML 文件 */
+        fun isHtmlFile(url: String): Boolean {
+            val clean = url.substringBefore('?').substringBefore('#').trim()
+            return clean.endsWith(".html", ignoreCase = true) || clean.endsWith(".htm", ignoreCase = true)
+        }
+
+        fun isPushSite(site: Site): Boolean {
+            return site.key.equals(PUSH_KEY, ignoreCase = true) ||
+                site.key.equals("nodejs_push_agent", ignoreCase = true) ||
+                site.key.endsWith("_push_agent", ignoreCase = true) ||
+                site.api.contains("/push_agent", ignoreCase = true) ||
+                site.api.contains("/spider/push/", ignoreCase = true)
+        }
+        private val HTML_TITLE_REGEX = Regex(
+            pattern = "<title[^>]*>(.*?)</title>",
+            options = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+        )
+        private val WHITESPACE_REGEX = Regex("\\s+")
+
+        /**
+         * 判定订阅 URL 返回的内容是否为 HTML 网页源：
+         * 1. Content-Type 包含 text/html 或 application/xhtml+xml，且响应正文以 `<` 开头
+         * 2. 或正文去除 BOM 与空白后以常见 HTML 文档/标签前缀开头，或包含完整的 `<html ...>` 结构
+         */
+        fun isHtmlResponse(contentType: String, body: String): Boolean {
+            val trimmed = body.trimStart('\uFEFF', ' ', '\t', '\r', '\n')
+            if (trimmed.isEmpty()) return false
+            if (trimmed.startsWith("{") || trimmed.startsWith("[")) return false
+
+            val ctLower = contentType.lowercase()
+            if ((ctLower.contains("text/html") || ctLower.contains("application/xhtml+xml")) && trimmed.startsWith("<")) {
+                return true
+            }
+
+            val headSample = trimmed.take(2048).lowercase()
+            if (
+                headSample.startsWith("<!doctype html") ||
+                headSample.startsWith("<html") ||
+                headSample.startsWith("<head") ||
+                headSample.startsWith("<body") ||
+                headSample.startsWith("<meta") ||
+                headSample.startsWith("<title") ||
+                headSample.startsWith("<script")
+            ) {
+                return true
+            }
+
+            if (headSample.startsWith("<!--") && (headSample.contains("<html") || headSample.contains("<!doctype html"))) {
+                return true
+            }
+
+            return headSample.contains("<html") &&
+                (body.contains("</html>", ignoreCase = true) || headSample.contains("<head") || headSample.contains("<body"))
+        }
+
+        /** 提取 HTML 中的 `<title>` 文本作为订阅默认展示名称 */
+        fun extractHtmlTitle(body: String): String {
+            if (body.isBlank()) return ""
+            val raw = HTML_TITLE_REGEX.find(body)?.groupValues?.getOrNull(1) ?: return ""
+            val decoded = raw
+                .replace("&nbsp;", " ", ignoreCase = true)
+                .replace("&amp;", "&", ignoreCase = true)
+                .replace("&lt;", "<", ignoreCase = true)
+                .replace("&gt;", ">", ignoreCase = true)
+                .replace("&quot;", "\"", ignoreCase = true)
+                .replace("&#39;", "'", ignoreCase = true)
+                .replace("&apos;", "'", ignoreCase = true)
+                .replace(WHITESPACE_REGEX, " ")
+                .trim()
+            return decoded.take(60)
+        }
+
         /** 配置中的结构字段取最新；用户可改的开关沿用本地值（isHome 不沿用，由 Config.home 统一调度）。 */
         fun merge(incoming: List<Site>, old: Map<String, Site>): List<Site> =
             incoming.map { new ->

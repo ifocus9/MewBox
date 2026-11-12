@@ -79,6 +79,7 @@ import coil3.compose.AsyncImage
 import coil3.compose.AsyncImagePainter
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import com.mewbox.tv.api.tmdb.TmdbClient
 import com.mewbox.tv.api.tmdb.bean.TmdbDetail
 import com.mewbox.tv.bean.Vod
 import com.mewbox.tv.ui.components.LocalTopBarGlassBackdrop
@@ -207,6 +208,8 @@ fun DetailHero(
     resumeEpisodeText: String?,
     onPlay: () -> Unit,
     modifier: Modifier = Modifier,
+    quickBackdrop: String? = null,
+    quickPoster: String? = null,
     onTitleLongClick: (() -> Unit)? = null,
 ) {
     val configuration = LocalConfiguration.current
@@ -214,9 +217,9 @@ fun DetailHero(
         .dp
         .coerceIn(HeroImageMinHeight, HeroImageMaxHeight)
 
-    // 收集所有可用图片路径（TMDB 背景与海报优先，末尾拼接站点海报）
-    val urls = remember(tmdbDetail, vod.vodPic) {
-        detailPosterUrls(vod, tmdbDetail, tmdbImageBase)
+    // 收集所有可用图片路径（TMDB 背景与海报优先，仅无 TMDB 图时回退站点海报）
+    val urls = remember(tmdbDetail, vod.vodPic, quickBackdrop, quickPoster) {
+        detailPosterUrls(vod, tmdbDetail, tmdbImageBase, quickBackdrop, quickPoster)
     }
 
     val pagerState = rememberPagerState(pageCount = { urls.size.coerceAtLeast(1) })
@@ -338,28 +341,48 @@ internal fun detailPosterUrls(
     vod: Vod,
     tmdbDetail: TmdbDetail?,
     tmdbImageBase: String,
+    quickBackdrop: String? = null,
+    quickPoster: String? = null,
 ): List<String> {
     val base = tmdbImageBase.trimEnd('/').ifEmpty { "https://image.tmdb.org/t/p" }
     val list = mutableListOf<String>()
-    tmdbDetail?.images?.backdrops?.mapNotNull { it.filePath }?.forEach {
-        list.add("$base/w1280$it")
+
+    if (tmdbDetail != null) {
+        // loaded 状态：横屏 Hero 以 backdrops 为主（按无字优先+评分降序最多取 4 张），再补少量 posters（最多取 2 张）
+        tmdbDetail.images?.backdrops.orEmpty()
+            .filter { !it.filePath.isNullOrEmpty() }
+            .sortedWith(
+                compareByDescending<com.mewbox.tv.api.tmdb.bean.TmdbImageItem> { it.iso639 == null }
+                    .thenByDescending { it.voteAverage }
+            )
+            .take(4)
+            .forEach { list.add("$base/w1280${it.filePath}") }
+
+        if (list.isEmpty() && !tmdbDetail.backdropPath.isNullOrEmpty()) {
+            list.add("$base/w1280${tmdbDetail.backdropPath}")
+        }
+
+        tmdbDetail.images?.posters.orEmpty()
+            .filter { !it.filePath.isNullOrEmpty() }
+            .sortedByDescending { it.voteAverage }
+            .take(2)
+            .forEach { list.add("$base/w780${it.filePath}") }
+
+        if (list.isEmpty() && !tmdbDetail.posterPath.isNullOrEmpty()) {
+            list.add("$base/w780${tmdbDetail.posterPath}")
+        }
+    } else {
+        // quick 状态：优先使用横屏背景 quickBackdrop，为空时才降级 quickPoster，避免竖版海报被切断拉伸
+        quickBackdrop?.let { list.add(it) } ?: quickPoster?.let { list.add(it) }
     }
-    if (list.isEmpty() && !tmdbDetail?.backdropPath.isNullOrEmpty()) {
-        list.add("$base/w1280${tmdbDetail.backdropPath}")
-    }
-    tmdbDetail?.images?.posters?.mapNotNull { it.filePath }?.forEach {
-        list.add("$base/w780$it")
-    }
-    if (list.isEmpty() && !tmdbDetail?.posterPath.isNullOrEmpty()) {
-        list.add("$base/w780${tmdbDetail.posterPath}")
-    }
+
+    // 只有 TMDB 一张图都没给出时才回退站源海报。
+    // 一旦拿到 TMDB 图，站源海报不再追加进轮播 —— 否则自动翻页会翻回站源图，
+    // 视觉上就是「TMDB 匹配到了但海报没替换」。
     if (list.isEmpty() && vod.vodPic.isNotEmpty()) {
         list.add(vod.vodPic)
     }
-    if (vod.vodPic.isNotEmpty() && !list.contains(vod.vodPic)) {
-        list.add(vod.vodPic)
-    }
-    return list.distinct()
+    return list.distinct().take(5)
 }
 
 /**
@@ -383,6 +406,8 @@ private fun DetailHeroPoster(
 
     if (urls.size == 1) {
         val targetUrl = urls[0]
+        var currentUrl by remember(targetUrl) { mutableStateOf(targetUrl) }
+        var hasFallenBack by remember(targetUrl) { mutableStateOf(false) }
         var isError by remember(targetUrl) { mutableStateOf(false) }
         Box(
             modifier = modifier
@@ -397,12 +422,18 @@ private fun DetailHeroPoster(
                 )
             } else {
                 AsyncImage(
-                    model = targetUrl,
+                    model = currentUrl,
                     contentDescription = vod.vodName,
                     contentScale = ContentScale.Crop,
                     onState = { state ->
                         if (state is AsyncImagePainter.State.Error) {
-                            isError = true
+                            val fallback = TmdbClient.resolveFallbackImageUrl(currentUrl)
+                            if (!hasFallenBack && fallback != null && fallback != currentUrl) {
+                                hasFallenBack = true
+                                currentUrl = fallback
+                            } else {
+                                isError = true
+                            }
                         }
                     },
                     modifier = Modifier.fillMaxSize(),
@@ -418,6 +449,8 @@ private fun DetailHeroPoster(
         modifier = modifier.fillMaxSize(),
     ) { page ->
         val targetUrl = urls[page]
+        var currentUrl by remember(targetUrl) { mutableStateOf(targetUrl) }
+        var hasFallenBack by remember(targetUrl) { mutableStateOf(false) }
         var isError by remember(targetUrl) { mutableStateOf(false) }
         Box(
             modifier = Modifier
@@ -432,12 +465,18 @@ private fun DetailHeroPoster(
                 )
             } else {
                 AsyncImage(
-                    model = targetUrl,
+                    model = currentUrl,
                     contentDescription = vod.vodName,
                     contentScale = ContentScale.Crop,
                     onState = { state ->
                         if (state is AsyncImagePainter.State.Error) {
-                            isError = true
+                            val fallback = TmdbClient.resolveFallbackImageUrl(currentUrl)
+                            if (!hasFallenBack && fallback != null && fallback != currentUrl) {
+                                hasFallenBack = true
+                                currentUrl = fallback
+                            } else {
+                                isError = true
+                            }
                         }
                     },
                     modifier = Modifier.fillMaxSize(),

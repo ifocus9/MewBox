@@ -1,6 +1,6 @@
 package com.mewbox.tv.ui.setting
 
-import android.widget.Toast
+import com.mewbox.tv.util.AppToast
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -61,6 +61,7 @@ fun SettingsScreen(
     var showHistoryDialog by rememberSaveable { mutableStateOf(false) }
     var showAboutDialog by rememberSaveable { mutableStateOf(false) }
     var showTmdbDialog by rememberSaveable { mutableStateOf(false) }
+    var showDoubanDialog by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         viewModel.loadCacheSize()
@@ -69,7 +70,7 @@ fun SettingsScreen(
     // 成功 / 失败的统一提示（订阅弹窗点确定后立即关闭，结果只走 Toast）
     LaunchedEffect(state.message) {
         state.message?.let { msg ->
-            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+            AppToast.show(msg)
             viewModel.consumeMessage()
         }
     }
@@ -167,7 +168,7 @@ fun SettingsScreen(
                             if (state.configs.any { it.url != state.savedConfigUrl }) {
                                 showHistoryDialog = true
                             } else {
-                                Toast.makeText(context, "没有可切换的订阅", Toast.LENGTH_SHORT).show()
+                                AppToast.show("没有可切换的订阅")
                             }
                         },
                         modifier = Modifier
@@ -190,6 +191,15 @@ fun SettingsScreen(
                     title = "TMDB 设置",
                     value = if (state.tmdbConfig.enable) "开启" else "关闭",
                     onClick = { showTmdbDialog = true },
+                )
+            }
+
+            // 卡片 3：豆瓣想看（追剧页「豆瓣想看」分段的账号来源）
+            SettingCard {
+                SettingRow(
+                    title = "豆瓣想看",
+                    value = state.doubanUid.ifBlank { "未设置" },
+                    onClick = { showDoubanDialog = true },
                 )
             }
 
@@ -271,16 +281,23 @@ fun SettingsScreen(
         )
     }
 
+    // 豆瓣想看 uid 弹窗
+    if (showDoubanDialog) {
+        DoubanDialog(
+            initialUid = state.doubanUid,
+            onSave = { uid ->
+                viewModel.saveDoubanUid(uid)
+                showDoubanDialog = false
+            },
+            onDismiss = { showDoubanDialog = false },
+        )
+    }
+
     // 关于弹窗
     if (showAboutDialog) {
         AboutDialog(
             onDismiss = { showAboutDialog = false },
         )
-    }
-
-    // 订阅导入 loading
-    if (state.showImportOverlay) {
-        LoadingState(text = "正在导入订阅...")
     }
 
     // 导入成功自动跳回首页

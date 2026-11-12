@@ -13,6 +13,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import com.mewbox.tv.bean.Config
 import com.mewbox.tv.bean.History
 import com.mewbox.tv.bean.Site
+import com.mewbox.tv.bean.TrackPreference
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -102,11 +103,33 @@ interface HistoryDao {
     suspend fun clear()
 }
 
-@Database(entities = [Config::class, Site::class, History::class], version = 5, exportSchema = true)
+@Dao
+interface TrackDao {
+    @Query("SELECT * FROM track_preference WHERE `key` = :key")
+    suspend fun findByKey(key: String): List<TrackPreference>
+
+    @Query("SELECT * FROM track_preference WHERE `key` = :key AND type = :type LIMIT 1")
+    suspend fun find(key: String, type: Int): TrackPreference?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(preference: TrackPreference)
+
+    @Query("DELETE FROM track_preference WHERE `key` = :key AND type = :type")
+    suspend fun delete(key: String, type: Int)
+
+    @Query("DELETE FROM track_preference WHERE `key` = :key")
+    suspend fun deleteByKey(key: String)
+
+    @Query("DELETE FROM track_preference")
+    suspend fun clear()
+}
+
+@Database(entities = [Config::class, Site::class, History::class, TrackPreference::class], version = 7, exportSchema = true)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun siteDao(): SiteDao
     abstract fun configDao(): ConfigDao
     abstract fun historyDao(): HistoryDao
+    abstract fun trackDao(): TrackDao
 
     companion object {
         val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -140,6 +163,34 @@ abstract class AppDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE history ADD COLUMN opening INTEGER NOT NULL DEFAULT 0")
                 db.execSQL("ALTER TABLE history ADD COLUMN ending INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE config ADD COLUMN type INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `track_preference` (
+                        `key` TEXT NOT NULL,
+                        `type` INTEGER NOT NULL,
+                        `name` TEXT NOT NULL DEFAULT '',
+                        `format` TEXT NOT NULL DEFAULT '',
+                        `language` TEXT,
+                        `label` TEXT,
+                        `width` INTEGER NOT NULL DEFAULT 0,
+                        `height` INTEGER NOT NULL DEFAULT 0,
+                        `isDisabled` INTEGER NOT NULL DEFAULT 0,
+                        `updatedAt` INTEGER NOT NULL DEFAULT 0,
+                        PRIMARY KEY(`key`, `type`)
+                    )
+                    """.trimIndent()
+                )
             }
         }
     }

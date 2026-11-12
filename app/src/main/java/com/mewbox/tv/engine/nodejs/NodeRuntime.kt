@@ -44,12 +44,8 @@ class NodeRuntime @Inject constructor(
     }
 
     /** 本地是否已有校验过的资源包（纯本地判断，不触发任何网络请求） */
-    fun hasCachedBundle(source: String?): Boolean {
-        return try {
-            if (source.isNullOrEmpty()) true else NodeBundle.restore(context, source) != null
-        } catch (_: Exception) {
-            false
-        }
+    fun hasCachedBundle(source: String? = null): Boolean {
+        return client.hasCachedBundle(source)
     }
 
     private val _loading = MutableStateFlow<String?>(
@@ -77,14 +73,22 @@ class NodeRuntime @Inject constructor(
 
     fun isRunning(): Boolean = client.isRunning()
 
-    suspend fun ensureStarted(source: String? = null, notify: Boolean = true): Boolean = withContext(Dispatchers.IO) {
+    suspend fun ensureStarted(
+        source: String? = null,
+        notify: Boolean = true,
+        showLoading: Boolean = true,
+    ): Boolean = withContext(Dispatchers.IO) {
         // 已经在跑（例如进程存活时重复进入 App）无需再打扰用户
         if (client.isRunning()) return@withContext true
         val id = sequence.incrementAndGet()
         // 有缓存也要先给出 loading，避免“没反应”的错觉
-        setLoading(id, initialText(source))
+        if (showLoading) {
+            setLoading(id, initialText(source))
+        }
         try {
-            val started = client.ensureStarted(source) { stage -> onStage(id, stage) }
+            val started = client.ensureStarted(source) { stage ->
+                if (showLoading) onStage(id, stage)
+            }
             if (notify) {
                 if (started) {
                     notifyResult(NodeBootStage.SUCCESS, "Node.js 服务启动成功")
@@ -97,7 +101,45 @@ class NodeRuntime @Inject constructor(
             if (notify) reportFailure(e)
             throw e
         } finally {
-            clearLoading(id)
+            if (showLoading) {
+                clearLoading(id)
+            }
+        }
+    }
+
+    /**
+     * 切回前台或必要时的静默预热：
+     * 在当前订阅源为 Node 或本地已存在 Node 缓存包（例如前端处于 HTML 网页源但底层需复用 Node 推送源）且服务未运行时在后台拉起，
+     * 不弹出阻断 UI 的遮罩浮层，不弹通知提示。
+     */
+    suspend fun warmUpIfNecessary(): Boolean = withContext(Dispatchers.IO) {
+        if (client.isRunning()) return@withContext true
+        val currentUrl = settings.currentConfigUrl
+        val targetSource = if (isConfig(currentUrl)) currentUrl else null
+        if (targetSource != null || hasCachedBundle(null)) {
+            try {
+                Timber.i("检测到 Node 服务未运行，切回前台静默预热拉起: %s", targetSource ?: "cached_bundle")
+                ensureStarted(source = targetSource, notify = false, showLoading = false)
+            } catch (e: Exception) {
+                Timber.w(e, "静默预热拉起 Node.js 运行时失败: %s", targetSource ?: "cached_bundle")
+                false
+            }
+        } else {
+            true
+        }
+    }
+
+    /**
+     * 静默拉起本地或指定 Node 服务并读取其 `/config` 转换后的站点配置 JSON。
+     */
+    suspend fun fetchConfigJson(source: String? = null): String? = withContext(Dispatchers.IO) {
+        try {
+            val started = ensureStarted(source = source, notify = false, showLoading = false)
+            if (!started) return@withContext null
+            client.fetchConfigJson(source)
+        } catch (e: Exception) {
+            Timber.w(e, "静默获取 Node.js /config 失败")
+            null
         }
     }
 

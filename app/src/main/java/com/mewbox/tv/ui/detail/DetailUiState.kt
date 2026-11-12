@@ -31,6 +31,9 @@ data class DetailUiState(
     val toastMessage: String? = null,
     val tmdbDetail: TmdbDetail? = null,
     val tmdbImageBase: String = "",
+    /** searchMulti 命中后第一时间回填，供海报与全屏虚化背景快速出图 */
+    val quickPoster: String? = null,
+    val quickBackdrop: String? = null,
     val resumeEpisodeText: String? = null,
     val startInFullscreen: Boolean = false,
     val showTmdbMatchDialog: Boolean = false,

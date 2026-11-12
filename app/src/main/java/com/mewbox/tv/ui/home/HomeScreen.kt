@@ -1,6 +1,6 @@
 package com.mewbox.tv.ui.home
 
-import android.widget.Toast
+import com.mewbox.tv.util.AppToast
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
@@ -23,6 +23,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.ContainedLoadingIndicator
@@ -68,6 +69,7 @@ fun HomeScreen(
     onNavigateToDetail: (siteKey: String, vodId: String, vodName: String, vodPic: String) -> Unit,
     onNavigateToSearch: (keyword: String) -> Unit = {},
     modifier: Modifier = Modifier,
+    onScrollInProgressChange: ((Boolean) -> Unit)? = null,
     viewModel: HomeViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -82,6 +84,14 @@ fun HomeScreen(
     // 为每个分类维护独立的 LazyGridState，避免转场并发使用同一个 gridState 产生冲突，并保留返回原分类时的滚动位置
     val gridStates = remember { mutableMapOf<String, LazyGridState>() }
     val currentGridState = gridStates.getOrPut(state.selectedClassId) { LazyGridState() }
+
+    // 关键优化：当首页网格或横向分类条处于滑动状态时，通知外部暂停高负荷 Shader 图层渲染
+    val isScrolling by remember(currentGridState) {
+        derivedStateOf { currentGridState.isScrollInProgress || tabListState.isScrollInProgress }
+    }
+    LaunchedEffect(isScrolling) {
+        onScrollInProgressChange?.invoke(isScrolling)
+    }
 
     // 记忆每个分类最近展示的影片列表，确保在 Tab 转场退场动画的短暂时间里，旧页面不会突变成新分类的数据
     val displayedItemsByClass = remember { mutableStateMapOf<String, List<Vod>>() }
@@ -102,7 +112,7 @@ fun HomeScreen(
     // 订阅刷新等提示反馈
     LaunchedEffect(state.message) {
         state.message?.let { msg ->
-            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+            AppToast.show(msg)
             viewModel.consumeMessage()
         }
     }
@@ -123,8 +133,8 @@ fun HomeScreen(
         }
     }
 
-    // 是否显示“回到顶部”悬浮按钮
-    val showBackToTop by remember {
+    // 是否显示“回到顶部”悬浮按钮（关联当前分类的 LazyGridState，分类切换时重新订阅）
+    val showBackToTop by remember(currentGridState) {
         derivedStateOf { currentGridState.firstVisibleItemIndex > 6 }
     }
 
@@ -158,7 +168,7 @@ fun HomeScreen(
                 if (state.configs.any { it.url != state.activeConfigUrl }) {
                     showConfigDialog = true
                 } else {
-                    Toast.makeText(context, "没有可切换的订阅", Toast.LENGTH_SHORT).show()
+                    AppToast.show("没有可切换的订阅")
                 }
             },
             onSearchClick = { onNavigateToSearch("") },
@@ -246,10 +256,11 @@ fun HomeScreen(
                                     verticalArrangement = Arrangement.spacedBy(10.dp),
                                     modifier = Modifier.fillMaxSize(),
                                 ) {
-                                    itemsIndexed(
-                                        categoryItems,
-                                        key = { index, vod -> "${index}_${vod.siteKey}_${vod.vodId}" },
-                                    ) { _, vod ->
+                                    items(
+                                        items = categoryItems,
+                                        key = { vod -> if (vod.vodId.isNotEmpty()) "${vod.siteKey}_${vod.vodId}" else "${vod.siteKey}_${vod.hashCode()}" },
+                                        contentType = { "vod" },
+                                    ) { vod ->
                                         VodCard(
                                             vod = vod,
                                             onClick = {
@@ -270,13 +281,13 @@ fun HomeScreen(
                                     }
 
                                     if (isCurrent && categoryItems.isNotEmpty() && state.page >= state.pageCount && !state.isLoadingMore) {
-                                        item(span = { GridItemSpan(maxLineSpan) }, key = "end_hint") {
+                                        item(span = { GridItemSpan(maxLineSpan) }, key = "end_hint", contentType = "end_hint") {
                                             EndHint()
                                         }
                                     }
 
                                     if (isCurrent && state.isLoadingMore) {
-                                        item(span = { GridItemSpan(maxLineSpan) }) {
+                                        item(span = { GridItemSpan(maxLineSpan) }, key = "loading_more", contentType = "loading_more") {
                                             Box(
                                                 modifier = Modifier
                                                     .fillMaxWidth()
@@ -285,6 +296,8 @@ fun HomeScreen(
                                             ) {
                                                 ContainedLoadingIndicator(
                                                     modifier = Modifier.size(32.dp),
+                                                    indicatorColor = MaterialTheme.colorScheme.primary,
+                                                    containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
                                                 )
                                             }
                                         }

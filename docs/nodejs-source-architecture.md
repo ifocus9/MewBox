@@ -162,7 +162,7 @@ sequenceDiagram
 |---|---|
 | `session` / `generation` | 双计数器：session 标记一次配置加载会话，generation 标记一次运行时实例；请求返回前必须核对两者，过期请求直接作废（`InterruptedIOException`） |
 | `loadCancellation` | 取消令牌贯穿「下载 → 启动 → 拉 config」全程；换源/清理时立即生效 |
-| 请求超时分档 | `/init` `/support` `/action` → 15s；`/play` `/proxy` → 60s；其余 → 45s（均 NO_PROXY 直连回环） |
+| 请求超时分档 | `/init` `/support` `/action` → 15s；`/play` → 60s；其余 → 45s（均 NO_PROXY 直连回环） |
 | 自动恢复 | 请求级传输失败（非超时）→ `recover()`：重启运行时 + **按原顺序重放全部 `/init`** → 重试一次；超时只作废不重启 |
 | 崩溃感知 | `NodeConnection` 监听 `onServiceDisconnected / onBindingDied / binderDied`，第一时间释放 latch 并标记失败 |
 | 响应体限额 | config 4MB、普通 JSON 16MB，超限抛 `NodeResponseException` |
@@ -207,7 +207,7 @@ flowchart TD
     S7 --> S8[⑧ 爬虫接口调用<br/>POST /init /home /detail /search /play<br/>ResultParser 解析进 UI]
 ```
 
-播放直链若指向 Node 本地服务（`/proxy`），由 `NodeClient.proxy()` 流式转发给 ExoPlayer：60s 长超时、透传 Range/UA/Referer/Origin、返回 `[code, contentType, stream, headers]` 四元组。
+播放直链若指向 Node 本地服务（`/proxy`），由 ExoPlayer 经 `OkHttpDataSource` 直连该本地地址，Node 侧爬虫自行带凭证取流并转发，宿主不参与字节搬运。请求头由 `Players.play()` 从 `Result.header` 注入，含 `/proxy` / `/m3u8-proxy` 特征的地址由 `inferMimeType()` 判为 HLS。
 
 ---
 

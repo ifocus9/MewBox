@@ -1,6 +1,6 @@
 # 豆瓣「想看」接入 MewBox：实施计划
 
-> 状态：**待实施**（2026-11-05 需求讨论稿，未改任何源码）
+> 状态：**已实施**（2026-11-06 完成编码、构建、装机与真机链路验证；见文末「实施记录」）
 > 目标：在「追剧」页增加一栏「豆瓣想看」，列出全部想看条目、滚动加载、点击直接跳全源搜索
 > 前置：老大确认 §1.4 拍板项 + 提供豆瓣 uid
 > 约束：**不新增顶层 Tab、不改 Room、不加第三方依赖、不引入登录态 / WebView / Cookie**
@@ -521,3 +521,43 @@ AsyncImage(model = request, ...)
 4. 是否需要把想看清单接入首页推荐位 / 复用 msearch 一键起播？现有 `Vod.isMsearch` 链路已具备，后续可低成本接。
 5. 是否给 `SiteRepository.isNameMatched` 加年份加权？需先量化误命中率，本期不改。
 6. 签名凭据失效后的兜底：是否要实现 CSV / JSON 手动导入？建议观察一段时间再定。
+
+---
+
+## 十二、实施记录（2026-11-06）
+
+### 12.1 落地清单
+
+| 文件 | 状态 |
+| ---- | ---- |
+| `api/douban/DoubanModels.kt` | ✅ 新增（DTO + WishItem/WishUiState + toWishItem 映射） |
+| `api/douban/DoubanApi.kt` | ✅ 新增（HMAC-SHA1 签名 + 错误码归一化） |
+| `api/douban/DoubanRepository.kt` | ✅ 新增（分页游标 + COW 缓存 + Mutex 节流 + 403 退避） |
+| `ui/history/WishViewModel.kt` | ✅ 新增（含 uid 变化自动同步、30s 同步节流） |
+| `ui/history/WishTab.kt` | ✅ 新增（焦点预加载 + 海报 header + 尾部状态条） |
+| `ui/setting/DoubanDialog.kt` | ✅ 新增（uid 输入 / people 段提取 / 内联校验） |
+| `di/Modules.kt` | ✅ 新增 `@Named("douban")` client（标准 TLS + Frodo UA） |
+| `api/config/SettingsRepository.kt` | ✅ `douban_uid` key + flow + setter + `normalizeDoubanUid` |
+| `ui/setting/SettingsViewModel.kt` / `SettingsScreen.kt` | ✅ 设置行 + 弹窗接入 |
+| `ui/history/HistoryScreen.kt` | ✅ 分段 pill + TopBar actions 分段切换 + `onNavigateToSearch` |
+| `MainActivity.kt` | ✅ `Tab.Keep` 分支传 `onNavigateToSearch` |
+| `app/src/test/.../DoubanApiTest.kt` | ✅ 新增 4 项单测（签名逐字节比对 Python 参考值） |
+
+零新依赖、零 Room 迁移、顶层 Tab / NavMetrics / FloatingNavBar 未动，符合全部约束。
+
+### 12.2 实测中新增的坑（计划文档之外的发现）
+
+| 坑 | 现象 | 修复 |
+| -- | ---- | ---- |
+| **豆瓣图片 CDN 校验 UA** | 只带 Referer 不够：`okhttp UA + Referer → 403 Forbidden`；必须浏览器 UA + Referer 才 200（§2.3 实测漏了这层） | `WishItemCard` 的 `ImageRequest` 同时注入 `Referer` + `User-Agent(浏览器)`，常量收在 `DoubanApi.BROWSER_UA` |
+| Coil 3.3.0 header API | 既非 `setHeader` 也非顶层方法，是 `coil3.network.httpHeaders(NetworkHeaders)` 扩展 | 已按 javap 反编译确认后使用 |
+| 模拟器自动化启动 | dnplayer 直接启动会因沙箱拦截 `sc.exe` 中断 | 用 `ldconsole launch --index 0` 后台拉起 |
+
+### 12.3 验证产物（雷神模拟器 / LDPlayer9 Android 9）
+
+- 单测：`testDebugUnitTest` 4/4 通过，Kotlin `_sig` 与 Python 探针参考值逐字节一致（`ts=1767400000 → aiqb0ba64vxt7Reo/6WzPxLLzjs=`）。
+- 基准 uid `1000001`：`total=77`、两轮探针条目/顺序完全一致、海报 Referer 200（报告：`build/douban_probe_report.json`）。
+- 真实 uid 运行：`start=0 返回=50 累计=50/85` → 滚动到底自动触发 `start=50 返回=35 累计=85/85 hasMore=false`，尾部显示「已全部加载 · 共 85 条」。
+- 海报：修复 UA 前报 `HTTP 403`（logcat `豆瓣海报加载失败`）；修复后错误计数 **0**，卡片无占位符。
+- 点击「三块广告牌」→ 搜索 → 详情/选集页（4K原盘 13.6GB 真实片源）端到端走通。
+- TopBar：想看分段右上角 content-desc 为「同步豆瓣想看」，播放记录分段仍为「清空历史」。

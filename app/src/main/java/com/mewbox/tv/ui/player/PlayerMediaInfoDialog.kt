@@ -3,7 +3,7 @@ package com.mewbox.tv.ui.player
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.widget.Toast
+import com.mewbox.tv.util.AppToast
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -151,7 +151,7 @@ private fun Modifier.copyOnTapOrLongPress(
     val copyAction = {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
         clipboard?.setPrimaryClip(ClipData.newPlainText(label, textToCopy))
-        Toast.makeText(context, toastMessage, Toast.LENGTH_SHORT).show()
+        AppToast.show(toastMessage)
     }
     detectTapGestures(
         onTap = { copyAction() },

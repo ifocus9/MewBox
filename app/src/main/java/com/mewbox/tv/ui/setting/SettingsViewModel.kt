@@ -44,6 +44,7 @@ data class SettingsUiState(
     val savedConfigUrl: String = "",
     val cacheSize: String = "0.0 MB",
     val tmdbConfig: TmdbConfig = TmdbConfig(),
+    val doubanUid: String = "",
     val importing: Boolean = false,
     /** 是否展示导入遮罩：Node.js 源交给全局 loading，避免两层提示叠加 */
     val showImportOverlay: Boolean = false,
@@ -94,11 +95,11 @@ class SettingsViewModel @Inject constructor(
 
     val uiState: StateFlow<SettingsUiState> = combine(
         combine(siteDao.observeAll(), settings.hostMappingFlow) { sites, host -> sites to host },
-        combine(configDao.observeAll(), tmdbRepository.tmdbConfigFlow) { configs, tmdb -> configs to tmdb },
+        combine(configDao.observeAll(), tmdbRepository.tmdbConfigFlow, settings.doubanUidFlow) { configs, tmdb, uid -> Triple(configs, tmdb, uid) },
         settings.configUrlFlow,
         cacheSizeFlow,
         transient,
-    ) { (sites, host), (configs, tmdb), url, cache, t ->
+    ) { (sites, host), (configs, tmdb, uid), url, cache, t ->
         SettingsUiState(
             sites = sites.filter { !it.hide }.map { SiteItem(it, router.isSupported(it)) },
             configs = configs,
@@ -106,6 +107,7 @@ class SettingsViewModel @Inject constructor(
             savedConfigUrl = url,
             cacheSize = cache,
             tmdbConfig = tmdb,
+            doubanUid = uid,
             importing = t.importing,
             showImportOverlay = t.importing && t.showOverlay,
             pendingHomeNav = t.pendingHomeNav,
@@ -138,8 +140,10 @@ class SettingsViewModel @Inject constructor(
             transient.value = Transient(importing = true, showOverlay = !nodeSource)
             transient.value = try {
                 // import 正常返回即 Node.js 已启动成功（client.load 阻塞到服务就绪），此时才允许跳首页
+                val count = vodConfig.import(input, name)
+                val msg = if (count == 0) "已导入网页订阅源" else "导入成功：$count 个站点"
                 Transient(
-                    message = "导入成功：${vodConfig.import(input, name)} 个站点",
+                    message = msg,
                     pendingHomeNav = true,
                 )
             } catch (e: Exception) {
@@ -205,6 +209,20 @@ class SettingsViewModel @Inject constructor(
     fun saveTmdbConfig(config: TmdbConfig) = viewModelScope.launch {
         tmdbRepository.save(config)
         transient.update { it.copy(message = "TMDB 设置已保存") }
+    }
+
+    fun saveDoubanUid(input: String) {
+        val uid = SettingsRepository.normalizeDoubanUid(input)
+            ?: run {
+                transient.update { it.copy(message = "无法识别豆瓣 uid，请输入纯数字或个人主页链接") }
+                return
+            }
+        viewModelScope.launch {
+            settings.setDoubanUid(uid)
+            transient.update {
+                it.copy(message = if (uid.isBlank()) "已清除豆瓣 uid" else "已保存豆瓣 uid：$uid")
+            }
+        }
     }
 
     suspend fun testTmdbApi(apiKey: String, apiBase: String): Result<String> =

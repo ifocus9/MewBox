@@ -15,6 +15,7 @@ import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import com.mewbox.tv.bean.TrackPreference
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -72,6 +73,10 @@ class Players @Inject constructor(
     private var progressJob: Job? = null
     private var trafficJob: Job? = null
     private val trafficSpeedMeter = TrafficSpeedMeter()
+
+    private var currentHistoryKey: String? = null
+    private val targetPreferences = mutableMapOf<Int, TrackPreference>()
+    private val restoredTypes = mutableSetOf<Int>()
 
     @OptIn(UnstableApi::class)
     val exoPlayer: ExoPlayer = run {
@@ -203,22 +208,87 @@ class Players @Inject constructor(
             }
 
             override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
-                updateTracks(tracks)
+                restorePendingTracks(tracks)
+                updateTracks(exoPlayer.currentTracks)
             }
 
             override fun onPlayerError(error: PlaybackException) {
                 Timber.e(error, "ExoPlayer 播放异常")
+                val friendlyMessage = getFriendlyErrorMessage(error)
+
+                // 若发生音频解码器初始化失败或不支持，且当前设置了音轨 override，自动恢复系统自适应音轨
+                if ((error.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
+                        error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED ||
+                        error.errorCode == PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED) &&
+                    targetPreferences.containsKey(C.TRACK_TYPE_AUDIO)
+                ) {
+                    Timber.w("ExoPlayer 音频解码失败，清除音轨偏好并尝试自适应恢复")
+                    targetPreferences.remove(C.TRACK_TYPE_AUDIO)
+                    val resetParams = exoPlayer.trackSelectionParameters.buildUpon()
+                        .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
+                        .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                        .build()
+                    exoPlayer.trackSelectionParameters = resetParams
+                    com.mewbox.tv.util.AppToast.show("音轨解码失败，已自动恢复默认音轨")
+                    exoPlayer.prepare()
+                    exoPlayer.play()
+                    return
+                }
+
                 _state.update {
                     it.copy(
                         playbackState = PlaybackState.ERROR,
-                        errorMessage = error.localizedMessage ?: "播放错误 (${error.errorCodeName})",
+                        errorMessage = friendlyMessage,
                         networkSpeed = "",
                     )
                 }
                 stopProgressPolling()
                 stopBufferingPolling()
+                com.mewbox.tv.util.AppToast.show(friendlyMessage)
             }
         })
+    }
+
+    /**
+     * 将 ExoPlayer 异常映射为标准中文可读提示（参考 TV ExoErrorMessageProvider）
+     */
+    private fun getFriendlyErrorMessage(error: PlaybackException): String {
+        return when (error.errorCode) {
+            PlaybackException.ERROR_CODE_DECODER_INIT_FAILED -> "解码器初始化失败（当前设备不支持该音视频格式）"
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED -> "当前设备不支持该音视频编码格式"
+            PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED -> "查询设备解码器失败"
+            PlaybackException.ERROR_CODE_DECODING_FAILED -> "音视频解码失败"
+            PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED -> "音频输出轨道初始化失败"
+            PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED -> "音频数据写入失败"
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED -> "网络连接失败，请检查网络"
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> "网络连接超时"
+            PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "媒体资源请求失败 (${error.message ?: error.errorCodeName})"
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED -> "不支持的视频封装格式（如 ISO 原盘镜像等）"
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED -> "视频封装格式损坏"
+            PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED -> "视频播放列表解析错误"
+            PlaybackException.ERROR_CODE_TIMEOUT -> "播放响应超时"
+            else -> error.localizedMessage?.takeIf { it.isNotBlank() } ?: "播放错误 (${error.errorCodeName})"
+        }
+    }
+
+    /**
+     * 汇报主动拦截或外部校验业务异常，重置播放状态机并同步展示提示
+     */
+    fun reportError(message: String, url: String = "") {
+        stopProgressPolling()
+        stopBufferingPolling()
+        try {
+            exoPlayer.stop()
+        } catch (_: Exception) {}
+        _state.update {
+            it.copy(
+                playbackState = PlaybackState.ERROR,
+                errorMessage = message,
+                playUrl = url.ifEmpty { it.playUrl },
+                networkSpeed = "",
+            )
+        }
+        com.mewbox.tv.util.AppToast.show(message)
     }
 
     @OptIn(UnstableApi::class)
@@ -230,7 +300,14 @@ class Players @Inject constructor(
         format: String = "",
     ) {
         if (url.isBlank()) {
-            _state.update { it.copy(playbackState = PlaybackState.ERROR, errorMessage = "播放地址为空") }
+            reportError("播放地址为空")
+            return
+        }
+
+        if (isIsoFormat(url = url, name = title, format = format)) {
+            val isoMessage = "检测到该资源为 ISO 原盘镜像，当前内置播放器暂不支持"
+            Timber.w("Players: 拦截不支持的 ISO 格式视频流: url=$url, title=$title, format=$format")
+            reportError(isoMessage, url)
             return
         }
 
@@ -327,6 +404,7 @@ class Players @Inject constructor(
             }
             checkBufferingPolling(true)
 
+            restoredTypes.clear()
             exoPlayer.setMediaSource(mediaSource, startPosition)
             exoPlayer.prepare()
             exoPlayer.playWhenReady = true
@@ -418,6 +496,79 @@ class Players @Inject constructor(
     }
 
     /**
+     * 设置当前播放会话（剧集 Key 与已持久化的轨道偏好）。
+     * 会在切集或从历史进度进入时被调用。
+     */
+    fun setPlaybackSession(historyKey: String, preferences: List<TrackPreference>) {
+        currentHistoryKey = historyKey
+        targetPreferences.clear()
+        restoredTypes.clear()
+        for (pref in preferences) {
+            targetPreferences[pref.type] = pref
+        }
+        val tracks = exoPlayer.currentTracks
+        if (!tracks.isEmpty) {
+            restorePendingTracks(tracks)
+            updateTracks(exoPlayer.currentTracks)
+        }
+    }
+
+    /**
+     * 依据当前偏好智能恢复未应用的字幕/音轨/视轨
+     */
+    private fun restorePendingTracks(tracks: androidx.media3.common.Tracks) {
+        if (tracks.isEmpty || targetPreferences.isEmpty()) return
+        var paramsBuilder: androidx.media3.common.TrackSelectionParameters.Builder? = null
+
+        for ((type, preference) in targetPreferences) {
+            if (restoredTypes.contains(type)) continue
+
+            if (preference.isDisabled) {
+                // 恢复关闭字幕
+                if (paramsBuilder == null) {
+                    paramsBuilder = exoPlayer.trackSelectionParameters.buildUpon()
+                }
+                paramsBuilder.setTrackTypeDisabled(type, true)
+                paramsBuilder.clearOverridesOfType(type)
+                restoredTypes.add(type)
+                Timber.d("restorePendingTracks: 成功恢复轨道禁用状态 type=%d", type)
+                continue
+            }
+
+            // 智能多维匹配
+            val match = PlayerTrackMatcher.findBestMatch(tracks, preference)
+            if (match != null) {
+                // 安全防线：若历史记录匹配到的偏好轨道在当前设备不受支持，跳过恢复，避免起播假死
+                if (!match.group.isTrackSupported(match.trackIndex)) {
+                    Timber.w("restorePendingTracks: 偏好匹配到的轨道不受当前设备支持，跳过恢复 type=%d", type)
+                    restoredTypes.add(type)
+                    continue
+                }
+                val override = androidx.media3.common.TrackSelectionOverride(
+                    match.group.mediaTrackGroup,
+                    match.trackIndex,
+                )
+                if (paramsBuilder == null) {
+                    paramsBuilder = exoPlayer.trackSelectionParameters.buildUpon()
+                }
+                paramsBuilder.setTrackTypeDisabled(type, false)
+                paramsBuilder.setOverrideForType(override)
+                restoredTypes.add(type)
+                Timber.d(
+                    "restorePendingTracks: 智能恢复轨道 type=%d, candidate=%s, score=%d",
+                    type,
+                    match.format.label ?: match.format.language,
+                    match.score,
+                )
+            }
+        }
+
+        if (paramsBuilder != null) {
+            exoPlayer.trackSelectionParameters = paramsBuilder.build()
+        }
+    }
+
+    /**
      * 解析 ExoPlayer 当前所有的轨道组并映射为响应式 PlayerTrack 实体
      */
     private fun updateTracks(tracks: androidx.media3.common.Tracks) {
@@ -472,29 +623,50 @@ class Players @Inject constructor(
     ): PlayerTrack {
         val format = group.getTrackFormat(trackIndex)
         val isSelected = group.isTrackSelected(trackIndex)
+        val isSupported = group.isTrackSupported(trackIndex)
         val type = group.type
 
         val name = PlayerTrackFormatter.formatTrackTitle(format, type, trackIndex)
         val details = PlayerTrackFormatter.formatTrackDetails(format, type)
+        val formatDesc = PlayerTrackMatcher.describeFormat(format)
 
         return PlayerTrack(
             id = "${type}_${groupIndex}_${trackIndex}",
             name = name,
             type = type,
             isSelected = isSelected,
+            isSupported = isSupported,
             groupIndex = groupIndex,
             trackIndex = trackIndex,
             language = format.language,
+            label = format.label,
+            width = if (format.width != C.LENGTH_UNSET) format.width else 0,
+            height = if (format.height != C.LENGTH_UNSET) format.height else 0,
             details = details,
+            formatDescription = formatDesc,
         )
     }
 
     /**
-     * 选中指定轨道（对齐 FongMi TrackSelectionOverride）
+     * 选中指定轨道（对齐 FongMi TrackSelectionOverride）并更新当前会话偏好
+     * @return true 表示切换成功，false 表示目标轨道不受当前设备解码器支持
      */
-    fun selectTrack(track: PlayerTrack) {
+    fun selectTrack(track: PlayerTrack, onPersist: ((TrackPreference) -> Unit)? = null): Boolean {
         val groups = exoPlayer.currentTracks.groups.filter { it.type == track.type }
-        val targetGroup = groups.getOrNull(track.groupIndex) ?: return
+        val targetGroup = groups.getOrNull(track.groupIndex) ?: return false
+
+        // 安全防线：若设备硬件/系统解码器不支持该轨道（如手机缺失 DTS 硬解），拒绝强行 Override，避免播放器静默假死
+        if (!targetGroup.isTrackSupported(track.trackIndex)) {
+            Timber.w(
+                "selectTrack: 目标轨道不受设备解码器支持 type=%d, groupIdx=%d, trackIdx=%d, name=%s",
+                track.type,
+                track.groupIndex,
+                track.trackIndex,
+                track.name,
+            )
+            return false
+        }
+
         val override = androidx.media3.common.TrackSelectionOverride(targetGroup.mediaTrackGroup, track.trackIndex)
         val params = exoPlayer.trackSelectionParameters
             .buildUpon()
@@ -502,18 +674,36 @@ class Players @Inject constructor(
             .setOverrideForType(override)
             .build()
         exoPlayer.trackSelectionParameters = params
+
+        val pref = track.toPreference(currentHistoryKey.orEmpty())
+        targetPreferences[track.type] = pref
+        restoredTypes.add(track.type)
+        onPersist?.invoke(pref)
+
         updateTracks(exoPlayer.currentTracks)
+        return true
     }
 
     /**
      * 禁用或开启指定轨道类型（如关闭字幕）
      */
-    fun setTrackTypeDisabled(type: Int, disabled: Boolean) {
+    fun setTrackTypeDisabled(type: Int, disabled: Boolean, onPersist: ((TrackPreference) -> Unit)? = null) {
         val builder = exoPlayer.trackSelectionParameters
             .buildUpon()
             .setTrackTypeDisabled(type, disabled)
         if (disabled) {
             builder.clearOverridesOfType(type)
+            val pref = TrackPreference(
+                key = currentHistoryKey.orEmpty(),
+                type = type,
+                name = if (type == C.TRACK_TYPE_TEXT) "关闭字幕" else "禁用",
+                format = TrackPreference.DISABLED_FORMAT,
+                isDisabled = true,
+                updatedAt = System.currentTimeMillis(),
+            )
+            targetPreferences[type] = pref
+            restoredTypes.add(type)
+            onPersist?.invoke(pref)
         }
         exoPlayer.trackSelectionParameters = builder.build()
         updateTracks(exoPlayer.currentTracks)
@@ -522,13 +712,18 @@ class Players @Inject constructor(
     /**
      * 重置轨道类型到系统自适应默认配置
      */
-    fun resetTrackTypeToDefault(type: Int) {
+    fun resetTrackTypeToDefault(type: Int, onPersist: (() -> Unit)? = null) {
         val params = exoPlayer.trackSelectionParameters
             .buildUpon()
             .setTrackTypeDisabled(type, false)
             .clearOverridesOfType(type)
             .build()
         exoPlayer.trackSelectionParameters = params
+
+        targetPreferences.remove(type)
+        restoredTypes.add(type)
+        onPersist?.invoke()
+
         updateTracks(exoPlayer.currentTracks)
     }
 
@@ -643,6 +838,27 @@ class Players @Inject constructor(
             } catch (_: Exception) {
                 false
             }
+        }
+
+        /**
+         * 判定是否为光盘镜像格式（ISO / DVD / Blu-ray 原盘）
+         * 对齐 FongMi / MewPlayer MpvLifecycleCoordinator 的 isLikelyIso 规则，
+         * 并结合 URL、剧集名称及 Format/MimeType 多维判定
+         */
+        fun isIsoFormat(url: String, name: String = "", format: String = ""): Boolean {
+            val f = format.trim().lowercase(Locale.ROOT)
+            if (f == "iso" || f.contains("iso") || f.contains("bluray") || f.contains("dvd") || f.contains("udf")) return true
+
+            val n = name.trim().lowercase(Locale.ROOT)
+            if (n.endsWith(".iso") || n.contains(".iso.") || n.contains(".iso ") || n.contains(".iso-") || n.contains(".iso_")) return true
+
+            val u = url.trim().lowercase(Locale.ROOT)
+            if (u.startsWith("webhtv-dvdiso://") || u.startsWith("dvd://") || u.startsWith("bd://")) return true
+            val cleanUrl = u.substringBefore('?').substringBefore('#')
+            if (cleanUrl.endsWith(".iso")) return true
+            if (u.contains(".iso?") || u.contains(".iso&") || u.contains(".iso#") || u.contains("/iso/")) return true
+
+            return false
         }
 
         fun formatDuration(ms: Long): String {
