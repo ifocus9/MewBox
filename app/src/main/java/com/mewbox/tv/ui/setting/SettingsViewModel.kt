@@ -132,7 +132,12 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    fun import(input: String, name: String = "") {
+    fun import(
+        input: String,
+        name: String = "",
+        configId: String = "",
+        replaceUrl: String = "",
+    ) {
         if (transient.value.importing) return
         // Node.js 源（订阅以 index.js.md5 结尾）的下载与启动由全局 loading 统一提示，这里不再叠遮罩
         val nodeSource = NodeBundle.isConfig(input)
@@ -140,7 +145,7 @@ class SettingsViewModel @Inject constructor(
             transient.value = Transient(importing = true, showOverlay = !nodeSource)
             transient.value = try {
                 // import 正常返回即 Node.js 已启动成功（client.load 阻塞到服务就绪），此时才允许跳首页
-                val count = vodConfig.import(input, name)
+                val count = vodConfig.import(input, name, configId = configId, replaceUrl = replaceUrl)
                 val msg = if (count == 0) "已导入网页订阅源" else "导入成功：$count 个站点"
                 Transient(
                     message = msg,
@@ -167,15 +172,18 @@ class SettingsViewModel @Inject constructor(
                     it.copy(message = if (targetName.isBlank()) "已清除名称，将使用订阅链接" else "订阅名称已更新")
                 }
             } else {
-                if (isEdit && oldUrl.isNotEmpty() && oldUrl != targetUrl) {
-                    configDao.delete(oldUrl)
-                }
+                val oldConfig = if (isEdit && oldUrl.isNotEmpty()) configDao.find(oldUrl) else null
                 val existing = configDao.find(targetUrl)
                 val finalName = when {
                     targetName.isNotBlank() -> targetName
-                    else -> existing?.name.orEmpty()
+                    else -> existing?.name ?: oldConfig?.name.orEmpty()
                 }
-                import(targetUrl, finalName)
+                import(
+                    input = targetUrl,
+                    name = finalName,
+                    configId = oldConfig?.id.orEmpty(),
+                    replaceUrl = if (isEdit && oldUrl != targetUrl) oldUrl else "",
+                )
             }
         }
     }
@@ -187,8 +195,11 @@ class SettingsViewModel @Inject constructor(
                 transient.update { it.copy(message = "当前激活的订阅不可删除") }
                 return@launch
             }
+            val config = configDao.find(url)
             configDao.delete(url)
-            historyDao.clearByConfig(url)
+            if (config != null && config.id.isNotBlank()) {
+                historyDao.clearWithTracksByConfig(config.id)
+            }
         }
     }
 

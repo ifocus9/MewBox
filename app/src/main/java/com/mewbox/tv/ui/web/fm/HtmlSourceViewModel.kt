@@ -153,26 +153,34 @@ class HtmlSourceViewModel @Inject constructor(
                     it.copy(message = if (targetName.isBlank()) "已清除名称，将使用网页标题或链接" else "订阅名称已更新")
                 }
             } else {
-                if (isEdit && oldUrl.isNotEmpty() && oldUrl != targetUrl) {
-                    configDao.delete(oldUrl)
-                }
+                val oldConfig = if (isEdit && oldUrl.isNotEmpty()) configDao.find(oldUrl) else null
                 val existing = configDao.find(targetUrl)
                 val finalName = when {
                     targetName.isNotBlank() -> targetName
-                    else -> existing?.name.orEmpty()
+                    else -> existing?.name ?: oldConfig?.name.orEmpty()
                 }
-                importNewConfig(targetUrl, finalName)
+                importNewConfig(
+                    url = targetUrl,
+                    name = finalName,
+                    configId = oldConfig?.id.orEmpty(),
+                    replaceUrl = if (isEdit && oldUrl != targetUrl) oldUrl else "",
+                )
             }
         }
     }
 
-    private fun importNewConfig(url: String, name: String) {
+    private fun importNewConfig(
+        url: String,
+        name: String,
+        configId: String = "",
+        replaceUrl: String = "",
+    ) {
         if (transient.value.isSwitching) return
         val isNode = NodeBundle.isConfig(url)
         viewModelScope.launch {
             transient.value = TransientState(isSwitching = true, showOverlay = !isNode)
             try {
-                val count = vodConfig.import(url, name)
+                val count = vodConfig.import(url, name, configId = configId, replaceUrl = replaceUrl)
                 if (count == 0) {
                     webController.loadSubscriptionUrl(url, forceReload = true)
                     transient.value = TransientState(message = "网页订阅源导入成功")
@@ -194,8 +202,11 @@ class HtmlSourceViewModel @Inject constructor(
                 transient.update { it.copy(message = "当前激活的订阅不可删除") }
                 return@launch
             }
+            val config = configDao.find(url)
             configDao.delete(url)
-            historyDao.clearByConfig(url)
+            if (config != null && config.id.isNotBlank()) {
+                historyDao.clearWithTracksByConfig(config.id)
+            }
         }
     }
 

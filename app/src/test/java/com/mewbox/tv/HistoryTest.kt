@@ -1,9 +1,12 @@
 package com.mewbox.tv
 
+import com.mewbox.tv.bean.Config
 import com.mewbox.tv.bean.History
 import com.mewbox.tv.player.Players
 import com.mewbox.tv.ui.history.HistoryViewModel
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class HistoryTest {
@@ -15,9 +18,18 @@ class HistoryTest {
     }
 
     @Test
-    fun history_key_withConfigUrl_isScoped() {
-        val key = History.key("t4_site", "vod_123", "http://example.com/tv.json")
-        assertEquals("http://example.com/tv.json_t4_site_vod_123", key)
+    fun history_key_withConfigId_isScoped() {
+        val key = History.key("t4_site", "vod_123", "cfg_abc123")
+        assertEquals("cfg_abc123_t4_site_vod_123", key)
+    }
+
+    @Test
+    fun config_newId_isUniqueAndNonBlank() {
+        val id1 = Config.newId()
+        val id2 = Config.newId()
+        assertTrue(id1.isNotBlank())
+        assertTrue(id2.isNotBlank())
+        assertNotEquals(id1, id2)
     }
 
     @Test

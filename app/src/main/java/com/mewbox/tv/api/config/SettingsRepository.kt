@@ -25,6 +25,7 @@ class SettingsRepository @Inject constructor(
 ) {
     private val hostKey = stringPreferencesKey("host_mapping")
     private val configUrlKey = stringPreferencesKey("config_url")
+    private val configIdKey = stringPreferencesKey("config_id")
     private val searchHistoryKey = stringPreferencesKey("search_history")
     private val doubanUidKey = stringPreferencesKey("douban_uid")
 
@@ -38,11 +39,16 @@ class SettingsRepository @Inject constructor(
         private set
 
     @Volatile
+    var currentConfigId: String = ""
+        private set
+
+    @Volatile
     var searchHistory: List<String> = emptyList()
         private set
 
     val hostMappingFlow: Flow<String> = context.dataStore.data.map { it[hostKey].orEmpty() }
     val configUrlFlow: Flow<String> = context.dataStore.data.map { it[configUrlKey].orEmpty() }
+    val configIdFlow: Flow<String> = context.dataStore.data.map { it[configIdKey].orEmpty() }
     val doubanUidFlow: Flow<String> = context.dataStore.data.map { it[doubanUidKey].orEmpty() }
     val compactEpisodeTitleFlow: Flow<Boolean> = context.dataStore.data.map { it[compactEpisodeKey] ?: false }
     val searchHistoryFlow: Flow<List<String>> = context.dataStore.data.map { prefs ->
@@ -66,6 +72,7 @@ class SettingsRepository @Inject constructor(
         val prefs = context.dataStore.data.first()
         val saved = prefs[hostKey].orEmpty()
         currentConfigUrl = prefs[configUrlKey].orEmpty()
+        currentConfigId = prefs[configIdKey].orEmpty()
         compactEpisodeTitle = prefs[compactEpisodeKey] ?: false
         searchHistory = parseSearchHistory(prefs[searchHistoryKey].orEmpty())
         // 容错处理：若残留废弃的 10.0.2.2 模拟器旧映射，自动清除，优先使用 App 本地内置 Node.js 服务
@@ -86,6 +93,23 @@ class SettingsRepository @Inject constructor(
         val v = url.trim()
         currentConfigUrl = v
         context.dataStore.edit { it[configUrlKey] = v }
+    }
+
+    suspend fun setConfigId(id: String) {
+        val v = id.trim()
+        currentConfigId = v
+        context.dataStore.edit { it[configIdKey] = v }
+    }
+
+    suspend fun setActiveConfig(url: String, id: String) {
+        val u = url.trim()
+        val i = id.trim()
+        currentConfigUrl = u
+        currentConfigId = i
+        context.dataStore.edit {
+            it[configUrlKey] = u
+            it[configIdKey] = i
+        }
     }
 
     suspend fun setCompactEpisodeTitle(value: Boolean) {

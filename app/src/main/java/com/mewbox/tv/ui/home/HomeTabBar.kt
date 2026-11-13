@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mewbox.tv.bean.VodClass
 import com.mewbox.tv.ui.theme.BlueTypeIndicator
+import androidx.compose.material.icons.rounded.Tune
 
 /**
  * 首页分类横向导航条（分类项文字居中对齐指示条 + 弹性展开动效 + 点击当前分类平滑回顶 + 右侧全部分类菜单按钮）
@@ -158,7 +159,7 @@ fun HomeTabBar(
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                imageVector = Icons.Default.Menu,
+                imageVector = Icons.Rounded.Tune,
                 contentDescription = "全部分类",
                 tint = Color(0xFF666666),
                 modifier = Modifier.size(20.dp),

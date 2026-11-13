@@ -25,6 +25,7 @@
 
 # Media3 ExoPlayer（无需全量 -keep，由 AAR 自带的 consumer rules 精确防混淆）
 -dontwarn androidx.media3.**
+-keep class io.github.anilbeesetti.nextlib.media3ext.** { *; }
 
 # Hilt
 -keep class * extends androidx.hilt.lifecycle.ViewModelAssistedFactory

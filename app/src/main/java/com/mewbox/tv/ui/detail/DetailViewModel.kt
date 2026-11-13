@@ -41,6 +41,7 @@ class DetailViewModel @Inject constructor(
 
     private var currentSiteKey: String = savedStateHandle["siteKey"] ?: ""
     private var currentVodId: String = savedStateHandle["vodId"] ?: ""
+    private var activeConfigId: String = ""
     private val initialVodName: String = savedStateHandle["vodName"] ?: ""
     val initialVodPic: String = savedStateHandle["vodPic"] ?: ""
     val autoPlay: Boolean = savedStateHandle["autoPlay"] ?: false
@@ -60,6 +61,7 @@ class DetailViewModel @Inject constructor(
     val uiState: StateFlow<DetailUiState> = _uiState.asStateFlow()
 
     private var playJob: Job? = null
+    private var prefetchJob: Job? = null
     private var tmdbJob: Job? = null
     private var tmdbRunningName: String? = null
     private var lastHeaders: Map<String, String> = emptyMap()
@@ -259,8 +261,8 @@ class DetailViewModel @Inject constructor(
             }
 
             // 加载该视频历史保存的字幕、音轨、视轨用户偏好并注入播放器
-            val currentConfigUrl = settingsRepository.currentConfigUrl
-            val historyKey = History.key(site.key, vod.vodId, currentConfigUrl)
+            val currentConfigId = repository.getActiveConfigId().also { activeConfigId = it }
+            val historyKey = History.key(site.key, vod.vodId, currentConfigId)
             val preferences = repository.getTrackPreferences(historyKey).ifEmpty {
                 repository.getTrackPreferences(History.key(site.key, vod.vodId))
             }
@@ -284,6 +286,37 @@ class DetailViewModel @Inject constructor(
                 playEpisode(matchedFlag, matchedEp, resumePos)
             } else if (shouldAutoPlay) {
                 _uiState.update { it.copy(isResolvingPlay = false, error = "未找到可播放的剧集") }
+            } else if (matchedFlag != null && matchedEp != null) {
+                // 常规进入海报详情页：后台预解析当前集清晰度列表，使详情页即时展示画质选项并提升后续起播速度
+                prefetchPlayUrls(site, matchedFlag, matchedEp)
+            }
+        }
+    }
+
+    private fun prefetchPlayUrls(site: Site, flag: Flag, episode: Episode) {
+        prefetchJob?.cancel()
+        prefetchJob = viewModelScope.launch {
+            _uiState.update { it.copy(isResolvingPlay = true) }
+            try {
+                Timber.d("预解析清晰度: site=${site.name}, flag=${flag.flag}, ep=${episode.name}")
+                val result = repository.resolvePlay(site, flag.flag, episode.url)
+                val primaryPlayUrl = result.playUrls.firstOrNull { it.url == result.url }
+                    ?: result.playUrls.firstOrNull()
+                    ?: PlayUrl("默认", result.url)
+
+                lastHeaders = result.header
+                lastFormat = result.format
+
+                _uiState.update {
+                    it.copy(
+                        isResolvingPlay = false,
+                        playUrls = result.playUrls,
+                        selectedPlayUrl = primaryPlayUrl,
+                    )
+                }
+            } catch (e: Exception) {
+                Timber.w(e, "预解析清晰度失败: site=${site.name}, flag=${flag.flag}, ep=${episode.name}")
+                _uiState.update { it.copy(isResolvingPlay = false) }
             }
         }
     }
@@ -399,7 +432,36 @@ class DetailViewModel @Inject constructor(
             val resumePos = if (history != null && history.vodFlag == flag.flag && history.episodeIndex == ep.index) {
                 history.position
             } else 0L
-            playEpisode(flag, ep, resumePos)
+
+            val site = _uiState.value.currentSite
+            val vod = _uiState.value.vod
+            val selectedUrl = _uiState.value.selectedPlayUrl
+            // 若预解析已完成且有效，直接起播以实现 0 RTT 极速秒播
+            if (site != null && vod != null && selectedUrl != null && selectedUrl.url.isNotBlank() && !Players.isIsoFormat(selectedUrl.url, ep.name, lastFormat)) {
+                prefetchJob?.cancel()
+                val (hasPrev, hasNext) = DetailEpisodeNav.checkHasNavEpisodes(flag, ep, _uiState.value.isEpisodeReversed)
+                _uiState.update {
+                    it.copy(
+                        selectedFlag = flag,
+                        selectedEpisode = ep,
+                        hasPreviousEpisode = hasPrev,
+                        hasNextEpisode = hasNext,
+                        isResolvingPlay = false,
+                    )
+                }
+                playbackTracker.createSession(site, vod, flag, ep, _uiState.value.opening, _uiState.value.ending)
+                val title = "${vod.vodName} - ${ep.name} (${selectedUrl.name})"
+                val effectiveStartPosition = if (_uiState.value.opening > 0L) maxOf(resumePos, _uiState.value.opening) else resumePos
+                players.play(
+                    url = selectedUrl.url,
+                    headers = lastHeaders,
+                    title = title,
+                    startPosition = effectiveStartPosition,
+                    format = lastFormat,
+                )
+            } else {
+                playEpisode(flag, ep, resumePos)
+            }
         }
     }
 
@@ -414,6 +476,8 @@ class DetailViewModel @Inject constructor(
     fun playEpisode(flag: Flag, episode: Episode, startPosition: Long = 0L) {
         val site = _uiState.value.currentSite ?: return
         val vod = _uiState.value.vod ?: return
+
+        prefetchJob?.cancel()
 
         playbackTracker.saveActiveSessionIfSucceeded(_uiState.value.opening, _uiState.value.ending)
         playbackTracker.clearSession()
@@ -507,25 +571,54 @@ class DetailViewModel @Inject constructor(
             return
         }
 
-        playbackTracker.createSession(site, vod, flag, episode, _uiState.value.opening, _uiState.value.ending)
-        val title = "${vod.vodName} - ${episode.name} (${playUrl.name})"
-        players.play(
-            url = playUrl.url,
-            headers = lastHeaders,
-            title = title,
-            startPosition = currentPosition,
-            format = lastFormat,
-        )
+        val isPlayerActive = players.state.value.playUrl.isNotEmpty() ||
+            players.state.value.playbackState != PlaybackState.IDLE
+        if (isPlayerActive) {
+            playbackTracker.createSession(site, vod, flag, episode, _uiState.value.opening, _uiState.value.ending)
+            val title = "${vod.vodName} - ${episode.name} (${playUrl.name})"
+            players.play(
+                url = playUrl.url,
+                headers = lastHeaders,
+                title = title,
+                startPosition = currentPosition,
+                format = lastFormat,
+            )
+        }
+        val switchMsg = "已切换画质：${playUrl.name}"
+        _uiState.update { it.copy(toastMessage = switchMsg) }
+        AppToast.show(switchMsg)
     }
 
-    fun selectFlag(flag: Flag) {
+    fun selectFlag(flag: Flag, playImmediately: Boolean = false) {
         if (flag == _uiState.value.selectedFlag) return
-        val currentEpIndex = _uiState.value.selectedEpisode?.index ?: 0
-        val targetEp = flag.episodes.getOrNull(currentEpIndex) ?: flag.episodes.firstOrNull() ?: return
+        val currentEp = _uiState.value.selectedEpisode
+        val currentEpIndex = currentEp?.index ?: 0
+        val targetEp = flag.episodes.getOrNull(currentEpIndex)
+            ?: (if (currentEp != null) flag.episodes.firstOrNull { it.name == currentEp.name } else null)
+            ?: flag.episodes.firstOrNull()
+            ?: return
         val currentPosition = players.state.value.currentPosition
-        _uiState.update { it.copy(selectedFlag = flag, selectedEpisode = targetEp) }
-        if (players.state.value.isPlaying || players.state.value.playbackState == PlaybackState.BUFFERING) {
+        val isPlayerActive = players.state.value.playUrl.isNotEmpty() ||
+            players.state.value.playbackState != PlaybackState.IDLE ||
+            _uiState.value.isResolvingPlay
+        val shouldPlay = playImmediately || isPlayerActive
+        prefetchJob?.cancel()
+        _uiState.update {
+            it.copy(
+                selectedFlag = flag,
+                selectedEpisode = targetEp,
+                playUrls = emptyList(),
+                selectedPlayUrl = null,
+                toastMessage = if (shouldPlay) "切换线路：${flag.flag}" else it.toastMessage,
+            )
+        }
+        if (shouldPlay) {
             playEpisode(flag, targetEp, currentPosition)
+        } else {
+            val site = _uiState.value.currentSite
+            if (site != null) {
+                prefetchPlayUrls(site, flag, targetEp)
+            }
         }
     }
 
@@ -585,9 +678,9 @@ class DetailViewModel @Inject constructor(
         val currentVod = _uiState.value.vod
         if (currentSite != null && currentVod != null) {
             viewModelScope.launch {
-                val configUrl = settingsRepository.currentConfigUrl
-                val oldKey = History.key(currentSite.key, currentVod.vodId, configUrl)
-                val newKey = History.key(newVod.siteKey, newVod.vodId, configUrl)
+                val configId = activeConfigId.ifBlank { repository.getActiveConfigId().also { activeConfigId = it } }
+                val oldKey = History.key(currentSite.key, currentVod.vodId, configId)
+                val newKey = History.key(newVod.siteKey, newVod.vodId, configId)
                 val targetSite = repository.getSite(newVod.siteKey) ?: Site(newVod.siteKey, newVod.siteKey, 4, "")
                 repository.copyHistoryAndPreferences(oldKey, newKey, targetSite, newVod)
                 loadDetail(newVod.siteKey, newVod.vodId, newVod.vodName, shouldAutoPlay = shouldAutoPlay)
@@ -792,8 +885,8 @@ class DetailViewModel @Inject constructor(
     fun getEffectiveHistoryKey(): String {
         val siteKey = _uiState.value.currentSite?.key ?: currentSiteKey
         val vodId = _uiState.value.vod?.vodId ?: currentVodId
-        val configUrl = settingsRepository.currentConfigUrl
-        return History.key(siteKey, vodId, configUrl)
+        val configId = activeConfigId.ifBlank { settingsRepository.currentConfigId }
+        return History.key(siteKey, vodId, configId)
     }
 
     fun selectTrack(track: PlayerTrack) {

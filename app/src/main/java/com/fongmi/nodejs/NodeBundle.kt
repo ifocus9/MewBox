@@ -21,6 +21,8 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import java.util.regex.Pattern
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
 import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -49,6 +51,8 @@ class NodeBundle internal constructor(
         private const val MAX_CONFIG_BYTES = 2L * 1024 * 1024
         private const val MAX_MD5_BYTES = 1024
         private const val MAX_MANIFEST_BYTES = 32 * 1024
+        private const val MAX_ZIP_TOTAL_BYTES = 64L * 1024 * 1024
+        private const val ZIP_MD5_FILE = "zip.md5"
         private const val PENDING = ".pending"
         private const val TRUSTED_KEY = "trusted-key.sha256"
         private const val PROBE_TIMEOUT_SECONDS = 10L
@@ -83,6 +87,17 @@ class NodeBundle internal constructor(
         private val ACTIVE_LOAD = AtomicReference<LoadSession?>()
 
         @JvmStatic
+        fun isZip(source: String?): Boolean {
+            if (source == null) return false
+            var value = source.split(Regex("[?#]"), 2)[0]
+            try {
+                value = URLDecoder.decode(value, StandardCharsets.UTF_8.name())
+            } catch (_: Exception) {
+            }
+            return value.lowercase(Locale.ROOT).endsWith(".zip")
+        }
+
+        @JvmStatic
         fun isConfig(url: String?): Boolean {
             if (url == null || url.regionMatches(0, "content://", 0, 10, ignoreCase = true)) return false
             var value = url.split(Regex("[?#]"), 2)[0]
@@ -90,7 +105,10 @@ class NodeBundle internal constructor(
                 value = URLDecoder.decode(value, StandardCharsets.UTF_8.name())
             } catch (_: Exception) {
             }
-            return value.lowercase(Locale.ROOT).endsWith("/index.js.md5") || value.equals("index.js.md5", ignoreCase = true)
+            val lower = value.lowercase(Locale.ROOT)
+            return lower.endsWith("/index.js.md5") ||
+                lower.equals("index.js.md5", ignoreCase = true) ||
+                lower.endsWith(".zip")
         }
 
         @JvmStatic
@@ -100,7 +118,7 @@ class NodeBundle internal constructor(
             val previous = ACTIVE_LOAD.getAndSet(session)
             previous?.cancel()
             return try {
-                if (!isConfig(source)) throw IOException("Node config must end with index.js.md5")
+                if (!isConfig(source)) throw IOException("Node config must end with index.js.md5 or .zip")
                 val key = Crypto.sha256(source)
                 val lock = SOURCE_LOCKS.computeIfAbsent(key) { Any() }
                 synchronized(lock) {
@@ -144,6 +162,11 @@ class NodeBundle internal constructor(
             val active = File(sourceRoot, "active")
             val stored = restorePrevious(active)
             pruneSourceRoot(sourceRoot)
+
+            if (isZip(source)) {
+                return prepareZipInternal(source, sourceRoot, active, stored, session, onDownload)
+            }
+
             val indexLocation = companion(source, "index.js")
             val configLocation = companion(source, "index.config.js")
             val configMd5Location = companion(source, "index.config.js.md5")
@@ -525,6 +548,188 @@ class NodeBundle internal constructor(
 
         private fun readTrustedKey(sourceRoot: File): String {
             val file = File(sourceRoot, TRUSTED_KEY)
+            if (!file.isFile) return ""
+            return try {
+                Path.read(file).trim()
+            } catch (_: IOException) {
+                ""
+            }
+        }
+
+        private fun prepareZipInternal(
+            source: String,
+            sourceRoot: File,
+            active: File,
+            stored: NodeBundle?,
+            session: LoadSession,
+            onDownload: (() -> Unit)? = null,
+        ): NodeBundle {
+            val isRemote = source.startsWith("http://") || source.startsWith("https://")
+            val zipFile: File
+            var tempRemoteFile: File? = null
+            try {
+                if (isRemote) {
+                    onDownload?.invoke()
+                    val downloads = File(sourceRoot, ".downloads").apply { if (!exists()) mkdirs() }
+                    tempRemoteFile = File.createTempFile("bundle-", ".zip", downloads)
+                    try {
+                        downloadFile(source, tempRemoteFile, MAX_INDEX_BYTES, downloads, session)
+                    } catch (e: Exception) {
+                        // 网络异常时，若本地已有之前正常校验通过的缓存 bundle，则降级复用
+                        if (stored != null) {
+                            session.check()
+                            Timber.w(e, "下载远程 zip 失败，降级复用本地已有的 bundle")
+                            return stored
+                        }
+                        throw e
+                    }
+                    zipFile = tempRemoteFile
+                } else {
+                    val path = if (source.startsWith("file://", ignoreCase = true)) {
+                        source.substring(7)
+                    } else {
+                        source
+                    }
+                    zipFile = File(path)
+                    if (!zipFile.isFile || !zipFile.canRead()) {
+                        throw IOException("无法读取本地压缩包文件: $zipFile")
+                    }
+                }
+
+                session.check()
+                val currentZipMd5 = Crypto.md5(zipFile)
+                val cachedZipMd5 = readZipMd5(sourceRoot)
+
+                // 若 zip 文件的 MD5 未变化且已有正常校验通过的缓存 bundle，则直接复用
+                if (stored != null && currentZipMd5.isNotEmpty() && currentZipMd5.equals(cachedZipMd5, ignoreCase = true)) {
+                    session.check()
+                    return stored
+                }
+
+                val staging = File(sourceRoot, "staging-" + UUID.randomUUID())
+                try {
+                    if (!staging.mkdirs() && !staging.isDirectory) {
+                        throw IOException("Unable to create Node staging directory")
+                    }
+
+                    unzipToDirectory(zipFile, staging, session)
+                    flattenSingleSubdirectoryIfPresent(staging)
+
+                    val index = File(staging, "index.js")
+                    val config = File(staging, "index.config.js")
+                    if (!index.isFile) throw IOException("压缩包内缺少 index.js")
+                    if (!config.isFile) throw IOException("压缩包内缺少 index.config.js")
+
+                    val indexMd5File = File(staging, "index.js.md5")
+                    val indexMd5 = if (indexMd5File.isFile) {
+                        val parsed = parseMd5(Path.read(indexMd5File))
+                        if (!Crypto.equals(index, parsed)) throw IOException("index.js MD5 mismatch")
+                        parsed
+                    } else {
+                        Crypto.md5(index).also {
+                            Path.writeAtomically(indexMd5File, "$it\n".toByteArray(StandardCharsets.US_ASCII))
+                        }
+                    }
+
+                    val configMd5File = File(staging, "index.config.js.md5")
+                    val configMd5 = if (configMd5File.isFile) {
+                        val parsed = parseMd5(Path.read(configMd5File))
+                        if (!Crypto.equals(config, parsed)) throw IOException("index.config.js MD5 mismatch")
+                        parsed
+                    } else {
+                        Crypto.md5(config).also {
+                            Path.writeAtomically(configMd5File, "$it\n".toByteArray(StandardCharsets.US_ASCII))
+                        }
+                    }
+
+                    val trustedKey = readTrustedKey(sourceRoot)
+                    val manifestFile = File(staging, NodeManifest.FILE_NAME)
+                    val manifestText = if (manifestFile.isFile) Path.read(manifestFile) else null
+                    if (manifestText == null && trustedKey.isNotEmpty()) {
+                        throw IOException("Signed Node bundle cannot downgrade to unsigned")
+                    }
+                    val manifest = if (manifestText == null) null else NodeManifest.parse(manifestText)
+                    val signingKey = verifyStagedManifest(manifest, index, config, trustedKey, staging)
+
+                    writeSidecars(staging, indexMd5, configMd5)
+                    session.check()
+                    commit(active, staging)
+
+                    if (currentZipMd5.isNotEmpty()) {
+                        Path.writeAtomically(File(sourceRoot, ZIP_MD5_FILE), currentZipMd5.toByteArray(StandardCharsets.US_ASCII))
+                    }
+
+                    session.check()
+                    return NodeBundle(active, indexMd5, configMd5, pending = true, signingKey = signingKey)
+                } finally {
+                    Path.clear(staging)
+                }
+            } finally {
+                tempRemoteFile?.delete()
+            }
+        }
+
+        private fun unzipToDirectory(zipFile: File, targetDir: File, session: LoadSession) {
+            val canonicalTarget = targetDir.canonicalFile
+            var totalBytes = 0L
+            val buffer = ByteArray(64 * 1024)
+
+            ZipInputStream(FileInputStream(zipFile)).use { zis ->
+                var entry: ZipEntry? = zis.nextEntry
+                while (entry != null) {
+                    session.check()
+                    val destFile = File(targetDir, entry.name).canonicalFile
+                    if (!destFile.path.startsWith(canonicalTarget.path + File.separator) && destFile != canonicalTarget) {
+                        throw SecurityException("Zip entry is outside target dir: ${entry.name}")
+                    }
+
+                    if (entry.isDirectory) {
+                        if (!destFile.isDirectory && !destFile.mkdirs() && !destFile.isDirectory) {
+                            throw IOException("Failed to create dir: $destFile")
+                        }
+                    } else {
+                        val parent = destFile.parentFile
+                        if (parent != null && !parent.isDirectory && !parent.mkdirs() && !parent.isDirectory) {
+                            throw IOException("Failed to create dir: $parent")
+                        }
+                        FileOutputStream(destFile).use { fos ->
+                            var len: Int
+                            while (zis.read(buffer).also { len = it } != -1) {
+                                session.check()
+                                totalBytes += len
+                                if (totalBytes > MAX_ZIP_TOTAL_BYTES) {
+                                    throw IOException("Node zip bundle exceeds size limit (64MB)")
+                                }
+                                fos.write(buffer, 0, len)
+                            }
+                            fos.flush()
+                            fos.fd.sync()
+                        }
+                    }
+                    zis.closeEntry()
+                    entry = zis.nextEntry
+                }
+            }
+        }
+
+        private fun flattenSingleSubdirectoryIfPresent(dir: File) {
+            if (File(dir, "index.js").isFile) return
+            val subDirs = dir.listFiles { f -> f.isDirectory } ?: return
+            val candidate = subDirs.firstOrNull { File(it, "index.js").isFile } ?: return
+            val children = candidate.listFiles() ?: return
+            for (child in children) {
+                val target = File(dir, child.name)
+                if (target.exists()) Path.clear(target)
+                if (!child.renameTo(target)) {
+                    copyDirectory(child, target)
+                    Path.clear(child)
+                }
+            }
+            Path.clear(candidate)
+        }
+
+        private fun readZipMd5(sourceRoot: File): String {
+            val file = File(sourceRoot, ZIP_MD5_FILE)
             if (!file.isFile) return ""
             return try {
                 Path.read(file).trim()

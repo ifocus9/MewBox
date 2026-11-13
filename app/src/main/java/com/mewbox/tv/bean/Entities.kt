@@ -43,6 +43,8 @@ data class Config(
     val updatedAt: Long = System.currentTimeMillis(),
     /** 0 = 普通 VOD 订阅源；1 = HTML 网页源 */
     val type: Int = TYPE_VOD,
+    /** 订阅唯一标识：编辑订阅更新链接时保持不变，用于关联播放历史与音视频轨偏好。 */
+    val id: String = newId(),
 ) {
     /** 展示名：未设置名称时回退到订阅链接 */
     val desc: String
@@ -55,6 +57,8 @@ data class Config(
     companion object {
         const val TYPE_VOD = 0
         const val TYPE_HTML = 1
+
+        fun newId(): String = java.util.UUID.randomUUID().toString().replace("-", "")
 
         /** 早期版本自动生成的「订阅 N」占位名，一律视为“未设置名称” */
         fun isAutoName(value: String): Boolean {
@@ -70,6 +74,7 @@ data class Config(
 @Entity(tableName = "history")
 data class History(
     @PrimaryKey val key: String,
+    val configId: String = "",
     val configUrl: String = "",
     val configName: String = "",
     val siteKey: String,
@@ -89,7 +94,7 @@ data class History(
     val updatedAt: Long = System.currentTimeMillis(),
 ) {
     companion object {
-        fun key(siteKey: String, vodId: String, configUrl: String = ""): String =
-            if (configUrl.isBlank()) "${siteKey}_$vodId" else "${configUrl}_${siteKey}_$vodId"
+        fun key(siteKey: String, vodId: String, configId: String = ""): String =
+            if (configId.isBlank()) "${siteKey}_$vodId" else "${configId}_${siteKey}_$vodId"
     }
 }

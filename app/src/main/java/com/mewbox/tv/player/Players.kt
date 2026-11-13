@@ -2,6 +2,7 @@ package com.mewbox.tv.player
 
 import android.content.Context
 import android.net.Uri
+import android.os.Handler
 import androidx.annotation.OptIn
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -17,6 +18,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.mewbox.tv.bean.TrackPreference
 import dagger.hilt.android.qualifiers.ApplicationContext
+import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.CompatFfmpegAudioRenderer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -80,26 +82,69 @@ class Players @Inject constructor(
 
     @OptIn(UnstableApi::class)
     val exoPlayer: ExoPlayer = run {
-        // 对齐 FongMi / MewPlayer:
-        // 1. 使用 ExoBufferBudget 根据设备可用 RAM 与堆上限自适应计算缓冲大小，防止 1G/2G 电视盒子 OOM，并在高配设备上提供充足缓冲
+        // 对齐 webhtv / FongMi:
+        // 1. 使用 ExoBufferBudget 根据设备可用 RAM 与 largeHeap 堆上限自适应计算缓冲配额（大内存手机最高 256MB，低配电视盒子防 OOM）
         val targetBufferBytes = com.mewbox.tv.player.exo.ExoBufferBudget.getEffectiveTargetBytes(context)
+        Timber.d("ExoPlayer 初始化缓冲预算: targetBufferBytes=%d MB", targetBufferBytes / (1024 * 1024))
 
-        // 2. bufferForPlaybackMs 设为 1500ms（既保证极速起播，又避免过小缓冲瞬间被耗尽引发二次卡顿）
-        // 3. bufferForPlaybackAfterRebufferMs 设为 3000ms（缓冲恢复后具备充足防抖余量）
-        // 4. setPrioritizeTimeOverSizeThresholds(true): 极其关键，以时间时长为准，避免因等待超大内存 buffer 填满而迟迟不起播
+        // 2. bufferForPlaybackMs 设为 1000ms：首帧缓冲够 1 秒立即渲染出画，配合解码器预热实现毫秒级秒开
+        // 3. bufferForPlaybackAfterRebufferMs 设为 5000ms：遇网盘抖动重缓冲后蓄满 5 秒再恢复，彻底消除“播1秒卡3秒”连环卡顿
+        // 4. minBufferMs=50_000 / maxBufferMs=120_000：对齐 FongMi 50s 低水位并拉宽至 120s 高水位，保持网盘长连接持续拉流
+        // 5. setBackBuffer(15_000, true)：保留最近 15 秒关键帧历史数据，短距离回退直接命中内存无需重连网盘
+        // 6. setPrioritizeTimeOverSizeThresholds(false)：对齐 webhtv，避免高码率原盘在 minBufferMs 水位处因超过字节上限引发高频拉流/断流震荡
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                /* minBufferMs = */ 30_000,
-                /* maxBufferMs = */ 60_000,
-                /* bufferForPlaybackMs = */ 1_500,
-                /* bufferForPlaybackAfterRebufferMs = */ 3_000,
+                /* minBufferMs = */ 50_000,
+                /* maxBufferMs = */ 120_000,
+                /* bufferForPlaybackMs = */ 1_000,
+                /* bufferForPlaybackAfterRebufferMs = */ 5_000,
             )
             .setTargetBufferBytes(targetBufferBytes)
-            .setPrioritizeTimeOverSizeThresholds(true)
+            .setBackBuffer(
+                /* backBufferDurationMs = */ 15_000,
+                /* retainBackBufferFromKeyframe = */ true,
+            )
+            .setPrioritizeTimeOverSizeThresholds(false)
             .build()
 
         // 5. 启用解码器降级容错 + 扩展解码器开启 + 解码器预热（消除首次起播解码器冷启动等待）
-        val renderersFactory = androidx.media3.exoplayer.DefaultRenderersFactory(context).apply {
+        val renderersFactory = object : androidx.media3.exoplayer.DefaultRenderersFactory(context) {
+            override fun buildAudioRenderers(
+                context: Context,
+                extensionRendererMode: Int,
+                mediaCodecSelector: androidx.media3.exoplayer.mediacodec.MediaCodecSelector,
+                enableDecoderFallback: Boolean,
+                audioSink: androidx.media3.exoplayer.audio.AudioSink,
+                eventHandler: Handler,
+                eventListener: androidx.media3.exoplayer.audio.AudioRendererEventListener,
+                out: ArrayList<androidx.media3.exoplayer.Renderer>,
+            ) {
+                // 1. 优先装载系统默认的 MediaCodec 硬解渲染器（保证 AAC/AC-3 等低功耗硬解）
+                super.buildAudioRenderers(
+                    context,
+                    extensionRendererMode,
+                    mediaCodecSelector,
+                    enableDecoderFallback,
+                    audioSink,
+                    eventHandler,
+                    eventListener,
+                    out,
+                )
+                // 2. 挂载 FFmpeg 音频扩展渲染器（保底软解 DTS、TrueHD）
+                try {
+                    out.add(
+                        CompatFfmpegAudioRenderer(
+                            context,
+                            eventHandler,
+                            eventListener,
+                            audioSink,
+                        ),
+                    )
+                } catch (t: Throwable) {
+                    Timber.w(t, "挂载 FFmpeg 音频软解渲染器失败")
+                }
+            }
+        }.apply {
             setEnableDecoderFallback(true)
             setExtensionRendererMode(androidx.media3.exoplayer.DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
             experimentalSetEnableMediaCodecVideoRendererPrewarming(true)
@@ -349,7 +394,10 @@ class Players @Inject constructor(
             val defaultDataSourceFactory = DefaultDataSource.Factory(context, httpFactory)
             // 移植自 MewPlayer: 注入 HttpEofRecoveryDataSource 自动拦截并重连网盘 unexpected EOF / 302 临时断流
             val upstreamFactory = com.mewbox.tv.player.exo.HttpEofRecoveryDataSource.Factory(defaultDataSourceFactory)
+            // 提高网盘/流媒体网络加载异常的最小重试次数（默认 3 次提升至 6 次），增强对网盘 302 调度与瞬时抖动的容忍度
+            val loadErrorHandlingPolicy = androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy(/* minimumLoadableRetryCount = */ 6)
             val mediaSourceFactory = DefaultMediaSourceFactory(upstreamFactory, extractorsFactory)
+                .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
 
             val mediaItemBuilder = MediaItem.Builder()
                 .setUri(Uri.parse(url))
@@ -375,6 +423,7 @@ class Players @Inject constructor(
                 androidx.media3.exoplayer.hls.HlsMediaSource.Factory(upstreamFactory)
                     .setExtractorFactory(hlsExtractorFactory)
                     .setAllowChunklessPreparation(true)
+                    .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
                     .createMediaSource(mediaItem)
             } else {
                 mediaSourceFactory.createMediaSource(mediaItem)

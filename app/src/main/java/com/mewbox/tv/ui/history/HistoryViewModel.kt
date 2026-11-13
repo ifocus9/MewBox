@@ -11,6 +11,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -29,9 +30,12 @@ class HistoryViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
 ) : ViewModel() {
 
-    val uiState: StateFlow<HistoryUiState> = settingsRepository.configUrlFlow
-        .flatMapLatest { configUrl ->
-            repository.observeHistories(configUrl).map { list ->
+    val uiState: StateFlow<HistoryUiState> = combine(
+        settingsRepository.configUrlFlow,
+        settingsRepository.configIdFlow,
+    ) { configUrl, configId -> configUrl to configId }
+        .flatMapLatest { (configUrl, configId) ->
+            repository.observeHistories(configId = configId, configUrl = configUrl).map { list ->
                 HistoryUiState(items = list, isLoading = false)
             }
         }
@@ -44,9 +48,11 @@ class HistoryViewModel @Inject constructor(
     }
 
     fun clearAll() {
-        val currentUrl = settingsRepository.currentConfigUrl
         viewModelScope.launch {
-            repository.clearHistories(currentUrl)
+            val activeId = repository.getActiveConfigId()
+            if (activeId.isNotBlank()) {
+                repository.clearHistories(activeId)
+            }
         }
     }
 

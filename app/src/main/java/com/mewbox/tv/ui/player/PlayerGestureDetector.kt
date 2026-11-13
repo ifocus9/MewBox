@@ -3,6 +3,7 @@ package com.mewbox.tv.ui.player
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerEventTimeoutCancellationException
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.PointerInputScope
@@ -43,12 +44,15 @@ private enum class DragAction {
  * 3. 长按倍速（按住屏幕中间主体内容区域加速，松手恢复）
  * 4. 水平滑动（快进 / 快退）
  * 5. 垂直滑动（左半屏亮度，右半屏音量）
+ * 6. 双指捏合（以画面中心为锚点缩放视频画面，字幕随画面同步缩放）
  *
  * 互斥保障：
  * - 左右两侧边缘 15% 区域专属亮度/音量控制，不触发长按倍速；
  * - 任何滑动在达到 touchSlop 时立即取消长按定时器，杜绝滑动调节亮度和长按倍速同时触发；
  * - 长按倍速期间发生大幅度位移即退出倍速；
- * - 单击与双击采用严格时间窗口防冲突判定。
+ * - 单击与双击采用严格时间窗口防冲突判定；
+ * - 第二根手指落下时立即终止已在进行的长按倍速 / 滑动，由各分支原有收尾补调 End 回调后
+ *   统一转入缩放；缩放期间消费全部事件，且清除单击/双击残留状态，杜绝一套手势产生两套动作。
  */
 suspend fun PointerInputScope.detectPlayerGestures(
     isLocked: () -> Boolean,
@@ -66,11 +70,23 @@ suspend fun PointerInputScope.detectPlayerGestures(
     onVolumeStart: () -> Unit,
     onVolumeChange: (deltaRatioY: Float) -> Unit,
     onVolumeEnd: () -> Unit,
+    onZoomStart: () -> Unit = {},
+    onZoomChange: (scaleFactorFromStart: Float) -> Unit = {},
 ) = coroutineScope {
     var lastTapTime = 0L
     var lastTapPosition = Offset.Zero
     var pendingSingleTapJob: Job? = null
     val doubleTapTimeout = 280L
+
+    /** 至少两指按下时返回前两指间距，否则返回 0；下限 1px 防止两指重合时作为除数 */
+    fun twoPointerSpan(event: PointerEvent): Float {
+        val pressed = event.changes.filter { it.pressed }
+        return if (pressed.size >= 2) {
+            (pressed[0].position - pressed[1].position).getDistance().coerceAtLeast(1f)
+        } else {
+            0f
+        }
+    }
 
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = true)
@@ -121,6 +137,9 @@ suspend fun PointerInputScope.detectPlayerGestures(
 
         var gestureMode = GestureMode.NONE
         var dragStartChange: PointerInputChange? = null
+        // 双指缩放：本轮是否已判定为缩放、以及手势起点的两指间距
+        var zoomDetected = false
+        var zoomStartSpan = 1f
 
         // 3. 初始手势判定（通过 withTimeout 等待长按，或优先捕获滑动/抬起）
         if (canTriggerBoost && !isSecondTapCandidate) {
@@ -128,6 +147,12 @@ suspend fun PointerInputScope.detectPlayerGestures(
                 withTimeout(viewConfiguration.longPressTimeoutMillis) {
                     while (true) {
                         val event = awaitPointerEvent()
+                        val span = twoPointerSpan(event)
+                        if (span > 0f) {
+                            zoomStartSpan = span
+                            zoomDetected = true
+                            break
+                        }
                         val change = event.changes.firstOrNull { it.id == pointerId } ?: break
                         if (change.changedToUpIgnoreConsumed()) {
                             gestureMode = GestureMode.TAP
@@ -157,6 +182,12 @@ suspend fun PointerInputScope.detectPlayerGestures(
             // 在左侧亮度区、右侧音量区或双击等待期：纯滑动/点击判定，不启动长按定时器，彻底杜绝误触倍速
             while (true) {
                 val event = awaitPointerEvent()
+                val span = twoPointerSpan(event)
+                if (span > 0f) {
+                    zoomStartSpan = span
+                    zoomDetected = true
+                    break
+                }
                 val change = event.changes.firstOrNull { it.id == pointerId } ?: break
                 if (change.changedToUpIgnoreConsumed()) {
                     gestureMode = GestureMode.TAP
@@ -183,6 +214,12 @@ suspend fun PointerInputScope.detectPlayerGestures(
 
                 while (true) {
                     val event = awaitPointerEvent()
+                    val span = twoPointerSpan(event)
+                    if (span > 0f) {
+                        zoomStartSpan = span
+                        zoomDetected = true
+                        break
+                    }
                     val change = event.changes.firstOrNull { it.id == pointerId } ?: break
                     change.consume()
                     if (!change.pressed || change.changedToUpIgnoreConsumed()) {
@@ -241,6 +278,12 @@ suspend fun PointerInputScope.detectPlayerGestures(
                     }
 
                     val event = awaitPointerEvent()
+                    val span = twoPointerSpan(event)
+                    if (span > 0f) {
+                        zoomStartSpan = span
+                        zoomDetected = true
+                        break
+                    }
                     val change = event.changes.firstOrNull { it.id == pointerId } ?: break
                     if (change.changedToUpIgnoreConsumed()) {
                         if (dragAction == DragAction.SEEK) {
@@ -284,6 +327,27 @@ suspend fun PointerInputScope.detectPlayerGestures(
 
             GestureMode.NONE -> {}
         }
+
+        // 5. 双指缩放：BOOST / DRAG 分支已在各自的收尾处补调了 End 回调，此处统一接管剩余事件。
+        // 刻意不新增 GestureMode.ZOOM：保持原有 when 结构不变，单次手势只走一条动作链。
+        if (zoomDetected) {
+            pendingSingleTapJob?.cancel()
+            pendingSingleTapJob = null
+            lastTapTime = 0L
+            lastTapPosition = Offset.Zero
+            onZoomStart()
+            while (true) {
+                val event = awaitPointerEvent()
+                val pressed = event.changes.filter { it.pressed }
+                if (pressed.size < 2) {
+                    event.changes.forEach { it.consume() }
+                    break
+                }
+                val span = twoPointerSpan(event)
+                if (span > 0f) onZoomChange(span / zoomStartSpan)
+                event.changes.forEach { it.consume() }
+            }
+        }
     }
 }
 
@@ -320,4 +384,3 @@ suspend fun PointerInputScope.detectPlayerGestures(
     onVolumeChange = onVolumeChange,
     onVolumeEnd = onVolumeEnd,
 )
-

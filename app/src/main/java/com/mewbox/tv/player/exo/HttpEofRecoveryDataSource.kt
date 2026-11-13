@@ -23,8 +23,8 @@ import java.net.SocketTimeoutException
 class HttpEofRecoveryDataSource(private val upstream: DataSource) : DataSource {
 
     companion object {
-        private const val MAX_CONSECUTIVE_RECONNECTS = 5
-        private const val MAX_OPEN_RETRIES = 3
+        private const val MAX_CONSECUTIVE_RECONNECTS = 8
+        private const val MAX_OPEN_RETRIES = 5
         private val UNSET_LENGTH: Long = C.LENGTH_UNSET.toLong()
 
         fun isRecoverableEof(error: Throwable): Boolean {
@@ -111,13 +111,24 @@ class HttpEofRecoveryDataSource(private val upstream: DataSource) : DataSource {
                 if (!isRecoverableEof(error) || consecutiveReconnects >= MAX_CONSECUTIVE_RECONNECTS || dataSpec == null) {
                     throw error
                 }
-                consecutiveReconnects++
-                try {
-                    Thread.sleep(80L * consecutiveReconnects)
-                } catch (_: InterruptedException) {
-                    Thread.currentThread().interrupt()
+                while (true) {
+                    consecutiveReconnects++
+                    try {
+                        Thread.sleep((150L * consecutiveReconnects).coerceAtMost(800L))
+                    } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        throw error
+                    }
+                    try {
+                        reconnectAtCurrentPosition()
+                        break
+                    } catch (openError: IOException) {
+                        if (!isRecoverableEof(openError) || consecutiveReconnects >= MAX_CONSECUTIVE_RECONNECTS) {
+                            throw openError
+                        }
+                        Timber.w(openError, "HttpEofRecoveryDataSource: 断点重连打开流失败，继续重试 (%d/%d)...", consecutiveReconnects, MAX_CONSECUTIVE_RECONNECTS)
+                    }
                 }
-                reconnectAtCurrentPosition()
             }
         }
     }

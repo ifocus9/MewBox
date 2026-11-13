@@ -160,6 +160,39 @@ internal fun LineCard(
 }
 
 /**
+ * 画质卡片（对齐 AVBox / DetailItemCard 风格）
+ */
+@Composable
+internal fun QualityCard(
+    name: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    DetailItemCard(
+        selected = selected,
+        onClick = onClick,
+        modifier = modifier.width(DetailItemWidth),
+    ) {
+        Text(
+            text = name,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            text = if (selected) "当前播放" else "点击切换",
+            style = MaterialTheme.typography.bodySmall,
+            color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+    }
+}
+
+/**
  * 换源区（对齐 AVBox SourceSection）
  */
 @Composable

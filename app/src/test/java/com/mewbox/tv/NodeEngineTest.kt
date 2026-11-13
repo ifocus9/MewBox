@@ -61,6 +61,10 @@ class NodeEngineTest {
         assertTrue(NodeBundle.isConfig("https://example.com/spider/index.js.md5"))
         assertTrue(NodeBundle.isConfig("http://127.0.0.1:8080/index.js.md5?v=1"))
         assertTrue(NodeBundle.isConfig("index.js.md5"))
+        assertTrue(NodeBundle.isConfig("file:///storage/emulated/0/Download/dist.zip"))
+        assertTrue(NodeBundle.isConfig("/storage/emulated/0/Download/dist.zip"))
+        assertTrue(NodeBundle.isConfig("dist.zip"))
+        assertTrue(NodeBundle.isConfig("https://example.com/spider/bundle.zip?token=123"))
         assertFalse(NodeBundle.isConfig("https://example.com/spider/config.json"))
         assertFalse(NodeBundle.isConfig("content://media/external/file/123"))
     }

@@ -197,10 +197,12 @@ class DetailPlaybackTracker @Inject constructor(
         val episode = session.episode
         ioScope.launch {
             try {
+                val currentConfigId = repository.getActiveConfigId()
                 val currentConfigUrl = settingsRepository.currentConfigUrl
                 val currentConfigName = repository.getConfigDesc(currentConfigUrl)
                 val history = History(
-                    key = History.key(site.key, vod.vodId, currentConfigUrl),
+                    key = History.key(site.key, vod.vodId, currentConfigId),
+                    configId = currentConfigId,
                     configUrl = currentConfigUrl,
                     configName = currentConfigName,
                     siteKey = site.key,
@@ -236,6 +238,7 @@ class DetailPlaybackTracker @Inject constructor(
         ioScope.launch {
             try {
                 val existing = repository.getHistory(site.key, vod.vodId)
+                val currentConfigId = repository.getActiveConfigId()
                 val currentConfigUrl = settingsRepository.currentConfigUrl
                 val currentConfigName = repository.getConfigDesc(currentConfigUrl)
                 val toSave = existing?.copy(
@@ -243,7 +246,8 @@ class DetailPlaybackTracker @Inject constructor(
                     ending = ending,
                     updatedAt = System.currentTimeMillis(),
                 ) ?: History(
-                    key = History.key(site.key, vod.vodId, currentConfigUrl),
+                    key = History.key(site.key, vod.vodId, currentConfigId),
+                    configId = currentConfigId,
                     configUrl = currentConfigUrl,
                     configName = currentConfigName,
                     siteKey = site.key,

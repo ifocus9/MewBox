@@ -65,7 +65,12 @@ class VodConfig @Inject constructor(
         }.distinctUntilChanged()
 
     /** 导入订阅：`input` 可以是订阅 URL（JSON / Node.js / HTML 网页），也可以是 JSON 文本。返回导入的站点数（HTML 源返回 0）。 */
-    suspend fun import(input: String, name: String = ""): Int {
+    suspend fun import(
+        input: String,
+        name: String = "",
+        configId: String = "",
+        replaceUrl: String = "",
+    ): Int {
         val text = input.trim()
         require(text.isNotEmpty()) { "请输入订阅地址或 JSON" }
         val isJson = text.startsWith("{")
@@ -74,16 +79,23 @@ class VodConfig @Inject constructor(
 
         // 若目标地址在本地已确认为 HTML 网页源，直接切换并交给 WebView 加载，无需重复发起阻塞探测请求
         val existingConfig = if (!isJson) configDao.find(text) else null
+        val resolvedId = existingConfig?.id?.takeIf { it.isNotBlank() }
+            ?: configId.ifBlank { Config.newId() }
+
         if (!isJson && !isNode && existingConfig?.isHtml == true) {
             val finalName = if (name.isNotBlank()) name else existingConfig.name
-            settings.setConfigUrl(text)
+            settings.setActiveConfig(text, resolvedId)
             configDao.insert(
                 existingConfig.copy(
+                    id = resolvedId,
                     name = finalName,
                     updatedAt = System.currentTimeMillis(),
                     type = Config.TYPE_HTML,
                 )
             )
+            if (replaceUrl.isNotBlank() && replaceUrl != text) {
+                configDao.delete(replaceUrl)
+            }
             backgroundScope.launch { ensurePushBackendReady() }
             _configReloadFlow.tryEmit(System.currentTimeMillis())
             return 0
@@ -137,7 +149,7 @@ class VodConfig @Inject constructor(
                 }
                 // HTML 网页源与底层点播/Node.js 引擎共存：
                 // 保留已有的 siteDao 站点（含 push_agent 推送源）与 NodeRuntime 进程，供网页调用 pan.play / playVod / search
-                settings.setConfigUrl(text)
+                settings.setActiveConfig(text, resolvedId)
                 configDao.insert(
                     Config(
                         url = text,
@@ -145,8 +157,12 @@ class VodConfig @Inject constructor(
                         home = "",
                         updatedAt = System.currentTimeMillis(),
                         type = Config.TYPE_HTML,
+                        id = resolvedId,
                     )
                 )
+                if (replaceUrl.isNotBlank() && replaceUrl != text) {
+                    configDao.delete(replaceUrl)
+                }
                 backgroundScope.launch { ensurePushBackendReady() }
                 _configReloadFlow.tryEmit(System.currentTimeMillis())
                 return 0
@@ -176,7 +192,7 @@ class VodConfig @Inject constructor(
             siteDao.replaceAll(finalSites)
 
             if (!isJson) {
-                settings.setConfigUrl(text)
+                settings.setActiveConfig(text, resolvedId)
                 val finalName = when {
                     name.isNotBlank() -> name
                     else -> existingConfig?.name.orEmpty()
@@ -188,8 +204,12 @@ class VodConfig @Inject constructor(
                         home = finalHomeKey,
                         updatedAt = System.currentTimeMillis(),
                         type = Config.TYPE_VOD,
+                        id = resolvedId,
                     )
                 )
+                if (replaceUrl.isNotBlank() && replaceUrl != text) {
+                    configDao.delete(replaceUrl)
+                }
             }
 
             // 发送配置刷新事件，触发首页等页面刷新
@@ -242,6 +262,9 @@ class VodConfig @Inject constructor(
         }
 
         val currentConfig = configDao.find(currentUrl)
+        if (currentConfig != null && currentConfig.id.isNotBlank() && settings.currentConfigId != currentConfig.id) {
+            settings.setConfigId(currentConfig.id)
+        }
         if (currentConfig?.isHtml == true) {
             nodeRuntime.clearLoadingForce()
             ensurePushBackendReady()

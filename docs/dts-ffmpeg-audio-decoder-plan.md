@@ -1,45 +1,49 @@
 # MewBox × FFmpeg 音频软解（DTS / TrueHD）移植计划
 
-> 文档版本：v1.0 ｜ 编制日期：2026-11-11  
+> 文档版本：v1.1 ｜ 编制日期：2026-11-12  
 > 目标仓库：`D:\project\MewBox`（`com.mewbox.tv`，minSdk 26 / targetSdk 35，严格维持纯 64 位 `arm64-v8a`）  
-> 参考基准：[MewPlayer](file:///D:/project/MewPlayer)（`nextlib-media3ext` + `CompatFfmpegAudioRenderer`）与 [TV](file:///D:/project/TV)（`FfmpegMotionRenderersFactory`）  
-> **状态：技术储备规划文档。当前 MewBox 已具备完整的不可播轨道感知、防假死拦截与自愈机制；本计划用于后续有蓝光原盘/单 DTS 音轨播放需求时随时启动接入。**
+> 参考基准：[webhtv](file:///D:/project/webhtv)（`nextlib-media3ext` + `CompatFfmpegAudioRenderer`）与 [TV](file:///D:/project/TV)（`FfmpegMotionRenderersFactory`）  
+> **状态：已全量落地接入。Media3 ExoPlayer 已成功注入 64 位纯净版 FFmpeg 音频扩展解码器，具备 DTS、DTS-HD、DTS:X、TrueHD 全量软解与立体声智能下混保底能力。**
 
 ---
 
 ## 0. 一页纸决策摘要
 
-| 维度 | 决策 / 结论 |
-| :--- | :--- |
-| **功能定位** | 为 Media3 ExoPlayer 注入轻量级 **FFmpeg 音频软解码器**，解决 Android 设备系统硬解缺失导致的 **DTS / DTS-HD / DTS:X / TrueHD (Dolby Atmos) / E-AC-3 JOC** 无声或播放假死问题。 |
-| **架构与 64 位硬约束** | **严格维持 `arm64-v8a` 纯 64 位**。对 AAR 进行过滤，剔除所有 32 位（`armeabi-v7a`、`x86`）so 库，坚决不引入任何 32 位依赖。 |
-| **包体积影响** | FFmpeg 64 位音频解码相关 so 库（`libavcodec`、`libavutil`、`libswresample`、`libswscale`、`libmedia3ext`）压缩打包后，APK 增量约 **+2.6MB**（从 ~24MB 增至 ~26.6MB），完全在可接受范围内。 |
-| **解码策略** | **硬件优先 + 软解保底（Hardware-First Fallback）**：AAC、AC-3、MP3 等日常格式优先使用系统 MediaCodec 硬解，零额外功耗；遇到设备无法硬解的 DTS/TrueHD 时自动无缝降级给 FFmpeg 输出 PCM。 |
-| **可复用成熟资产** | ① `D:\project\MewPlayer\third_party\maven` 中现成的 64 位 `nextlib-media3ext` AAR；② MewPlayer 成熟的 [`CompatFfmpegAudioRenderer.java`](file:///D:/project/MewPlayer/app/src/main/java/io/github/anilbeesetti/nextlib/media3ext/ffdecoder/CompatFfmpegAudioRenderer.java)（已解决声卡多声道下混与防爆音问题）。 |
-| **预计工时** | **约 15 ~ 25 分钟**即可落地完成编译与验证。 |
+| 维度                   | 决策 / 结论                                                                                                                                                                                                                                                                                             |
+| :--------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **功能定位**           | 为 Media3 ExoPlayer 注入轻量级 **FFmpeg 音频软解码器**，解决 Android 设备系统硬解缺失导致的 **DTS / DTS-HD / DTS:X / TrueHD (Dolby Atmos) / E-AC-3 JOC** 无声或播放假死问题。                                                                                                                           |
+| **架构与 64 位硬约束** | **严格维持 `arm64-v8a` 纯 64 位**。对 AAR 进行过滤，剔除所有 32 位（`armeabi-v7a`、`x86`）so 库，坚决不引入任何 32 位依赖。                                                                                                                                                                             |
+| **包体积影响**         | FFmpeg 64 位音频解码相关 so 库（`libavcodec`、`libavutil`、`libswresample`、`libswscale`、`libmedia3ext`）压缩打包后，APK 增量约 **+2.6MB**（从 ~24MB 增至 ~26.6MB），完全在可接受范围内。                                                                                                              |
+| **解码策略**           | **硬件优先 + 软解保底（Hardware-First Fallback）**：AAC、AC-3、MP3 等日常格式优先使用系统 MediaCodec 硬解，零额外功耗；遇到设备无法硬解的 DTS/TrueHD 时自动无缝降级给 FFmpeg 输出 PCM。                                                                                                                 |
+| **可复用成熟资产**     | ① `D:\project\webhtv\third_party\maven` 中现成的 64 位 `nextlib-media3ext` AAR；② webhtv 成熟的 [`CompatFfmpegAudioRenderer.java`](file:///D:/project/webhtv/app/src/main/java/io/github/anilbeesetti/nextlib/media3ext/ffdecoder/CompatFfmpegAudioRenderer.java)（已解决声卡多声道下混与防爆音问题）。 |
+| **预计工时**           | **约 15 ~ 25 分钟**即可落地完成编译与验证。                                                                                                                                                                                                                                                             |
 
 ---
 
 ## 1. 业务痛点与技术现状
 
 ### 1.1 痛点场景
-* **蓝光原盘 (Blu-ray) 与 BD Remux 片源**：发烧友在网盘中分享的高清原盘视频，为了追求原汁原味的声音动态，经常**只封装了一条主 DTS-HD MA / DTS:X 音轨**，并未压制第二条供网络分发的 AC-3 或 AAC 兼容音轨。
-* **硬件专利缺失**：绝大多数 Android 手机厂商（小米、华为、OPPO、vivo、三星、Google Pixel 等）在芯片系统层（MediaCodec）均**未购买 DTS 专利授权**，导致系统层根本不具备 DTS 硬解能力。
-* **此前表现**：用户切换至 `VND.DTS`（DTS）音轨后，ExoPlayer 找不到匹配的音频解码器，导致音频输出中断、视频画面在等待时钟时卡顿假死，且由于无异常抛出而没有任何提示。
+
+- **蓝光原盘 (Blu-ray) 与 BD Remux 片源**：发烧友在网盘中分享的高清原盘视频，为了追求原汁原味的声音动态，经常**只封装了一条主 DTS-HD MA / DTS:X 音轨**，并未压制第二条供网络分发的 AC-3 或 AAC 兼容音轨。
+- **硬件专利缺失**：绝大多数 Android 手机厂商（小米、华为、OPPO、vivo、三星、Google Pixel 等）在芯片系统层（MediaCodec）均**未购买 DTS 专利授权**，导致系统层根本不具备 DTS 硬解能力。
+- **此前表现**：用户切换至 `VND.DTS`（DTS）音轨后，ExoPlayer 找不到匹配的音频解码器，导致音频输出中断、视频画面在等待时钟时卡顿假死，且由于无异常抛出而没有任何提示。
 
 ### 1.2 当前已完成的防假死保护（第一阶段，已合入 main）
+
 在启动完整 FFmpeg 软解移植前，当前代码已经完成了严密的安全兜底与展示修复：
+
 1. **名称标准化**：[`PlayerTrackFormatter`](file:///d:/project/MewBox/app/src/main/java/com/mewbox/tv/player/PlayerTrackFormatter.kt#L288) 规范识别所有 DTS MIME（包括 `audio/vnd.dts`），准确展示为 `DTS` / `DTS-HD` / `DTS:X`，不再出现 `VND.DTS`。
 2. **支持度感知**：[`PlayerTrack`](file:///d:/project/MewBox/app/src/main/java/com/mewbox/tv/player/PlayerTrack.kt#L16) 注入 `isSupported` 状态。
 3. **弹窗防御**：[`TrackSelectionDialog`](file:///d:/project/MewBox/app/src/main/java/com/mewbox/tv/ui/player/TrackSelectionDialog.kt#L225) 对当前设备不支持的音轨追加 `设备不支持` 红色微胶囊，点击时弹出 Toast 并拦截切换，**维持原音频流（如 AC-3）正常播放**。
 4. **历史偏好与故障自愈**：[`Players.kt`](file:///d:/project/MewBox/app/src/main/java/com/mewbox/tv/player/Players.kt#L215) 在换集恢复偏好时跳过不支持轨道，若发生解码器报错自动清除 Override 并恢复默认流。
 
 ### 1.3 启动第二阶段（FFmpeg 软解）的触发条件
+
 当日常在网盘中遇到**只有单条 DTS 音轨、没有提供 AC-3 备用音轨**的片源，且产生明确观影诉求时，按照本方案执行无缝升级。
 
 ---
 
-## 2. 参考上游与同构项目（MewPlayer / TV）实现剖析
+## 2. 参考上游与同构项目（webhtv / TV）实现剖析
 
 ### 2.1 解码链路对比
 
@@ -52,7 +56,7 @@
          ├───> [当前 MewBox 现状]
          │        └─> 查询系统 MediaCodec ──> 无解码器 ──> isTrackSupported = false ──> 弹窗标红拦截，保持 AC-3 播放
          │
-         └───> [引入 FFmpeg 扩展后（TV / MewPlayer 方案）]
+         └───> [引入 FFmpeg 扩展后（TV / webhtv 方案）]
                   ├─> 1. 查询系统 MediaCodec (硬解优先) ──> 失败/不支持
                   └─> 2. 自动降级至 CompatFfmpegAudioRenderer (扩展软解)
                            │
@@ -62,9 +66,10 @@
 ```
 
 ### 2.2 上游核心资产
-1. **AAR 资源**：`D:\project\MewPlayer\third_party\maven\io\github\anilbeesetti\nextlib-media3ext\1.10.0-0.12.1-fongmi-softload-av3a-avs3-ffmpeg901-r5\`
-   - 包含针对 FongMi / MewPlayer 深度调优的 FFmpeg 动态库与 JNI 桥接层。
-2. **源码实现**：[`D:\project\MewPlayer\app\src\main\java\io\github\anilbeesetti\nextlib\media3ext\ffdecoder\CompatFfmpegAudioRenderer.java`](file:///D:/project/MewPlayer/app/src/main/java/io/github/anilbeesetti/nextlib/media3ext/ffdecoder/CompatFfmpegAudioRenderer.java)
+
+1. **AAR 资源**：`D:\project\webhtv\third_party\maven\io\github\anilbeesetti\nextlib-media3ext\1.10.0-0.12.1-fongmi-softload-av3a-avs3-ffmpeg901-r5\`
+   - 包含针对 FongMi / webhtv 深度调优的 FFmpeg 动态库与 JNI 桥接层。
+2. **源码实现**：[`D:\project\webhtv\app\src\main\java\io\github\anilbeesetti\nextlib\media3ext\ffdecoder\CompatFfmpegAudioRenderer.java`](file:///D:/project/webhtv/app/src/main/java/io/github/anilbeesetti/nextlib/media3ext/ffdecoder/CompatFfmpegAudioRenderer.java)
    - 继承自 Media3 `DecoderAudioRenderer<FfmpegAudioDecoder>`。
    - 关键能力：
      - 正确响应 `supportsFormatInternal(Format)`，当遇到 `audio/vnd.dts`、`audio/vnd.dts.hd`、`audio/true-hd` 时返回 `C.FORMAT_HANDLED`。
@@ -104,10 +109,10 @@ dependencies {
 
 ### 步骤 2：移植 `CompatFfmpegAudioRenderer`
 
-在 `app/src/main/java/com/mewbox/tv/player/exo/decoder/` 下建立 Kotlin 类 `CompatFfmpegAudioRenderer.kt`，移植 MewPlayer 的核心逻辑：
+在 `app/src/main/java/io/github/anilbeesetti/nextlib/media3ext/ffdecoder/` 下建立 Kotlin 类 `CompatFfmpegAudioRenderer.kt`（因 `FfmpegAudioDecoder` 为包级私有类，包名必须对齐，使用 `internal` 保证模块内可见性并规避暴露包私有超类型的编译器约束）：
 
 ```kotlin
-package com.mewbox.tv.player.exo.decoder
+package io.github.anilbeesetti.nextlib.media3ext.ffdecoder
 
 import android.content.Context
 import android.os.Handler
@@ -202,17 +207,17 @@ class CompatFfmpegAudioRenderer(
                     audioSink,
                     eventHandler,
                     eventListener,
-                    out
+                    out,
                 )
                 // 2. 挂载 FFmpeg 音频扩展渲染器（保底软解 DTS、TrueHD）
                 try {
                     out.add(
-                        com.mewbox.tv.player.exo.decoder.CompatFfmpegAudioRenderer(
+                        CompatFfmpegAudioRenderer(
                             context,
                             eventHandler,
                             eventListener,
-                            audioSink
-                        )
+                            audioSink,
+                        ),
                     )
                 } catch (t: Throwable) {
                     Timber.w(t, "挂载 FFmpeg 音频软解渲染器失败")
@@ -229,11 +234,10 @@ class CompatFfmpegAudioRenderer(
 
 ## 5. 验收标准与测试用例
 
-| 编号 | 测试用例 | 预期表现 |
-| :--- | :--- | :--- |
-| **TC-01** | 播放单 DTS 5.1 音轨的 MKV 蓝光原盘片源 | 视频起播顺畅，声音正常输出，无爆音、无杂音，人声对白清晰（立体声下混正常）。 |
-| **TC-02** | 播放同时包含 AC-3 与 DTS 双音轨的片源 | 音轨选择弹窗中两条音轨均显示正常、无“设备不支持”置灰；自由切换音轨，秒切出声且画面不卡顿。 |
-| **TC-03** | 纯 64 位安装包体积与 ABI 校验 | 使用 `apkanalyzer` 校验 APK，仅包含 `lib/arm64-v8a`，无任何 32 位 so 库；APK 体积增量在 3MB 以内。 |
-| **TC-04** | 长时间播放音画同步检测 | 播放 30 分钟以上 DTS 音轨视频，声画完全同步，无音频漂移或延迟累积。 |
-| **TC-05** | 换集与历史记录偏好恢复 | 选中 DTS 音轨后切换到下一集，正确继承 DTS 偏好并无缝起播。 |
-
+| 编号      | 测试用例                               | 预期表现                                                                                           |
+| :-------- | :------------------------------------- | :------------------------------------------------------------------------------------------------- |
+| **TC-01** | 播放单 DTS 5.1 音轨的 MKV 蓝光原盘片源 | 视频起播顺畅，声音正常输出，无爆音、无杂音，人声对白清晰（立体声下混正常）。                       |
+| **TC-02** | 播放同时包含 AC-3 与 DTS 双音轨的片源  | 音轨选择弹窗中两条音轨均显示正常、无“设备不支持”置灰；自由切换音轨，秒切出声且画面不卡顿。         |
+| **TC-03** | 纯 64 位安装包体积与 ABI 校验          | 使用 `apkanalyzer` 校验 APK，仅包含 `lib/arm64-v8a`，无任何 32 位 so 库；APK 体积增量在 3MB 以内。 |
+| **TC-04** | 长时间播放音画同步检测                 | 播放 30 分钟以上 DTS 音轨视频，声画完全同步，无音频漂移或延迟累积。                                |
+| **TC-05** | 换集与历史记录偏好恢复                 | 选中 DTS 音轨后切换到下一集，正确继承 DTS 偏好并无缝起播。                                         |

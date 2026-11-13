@@ -129,6 +129,7 @@ fun DirectPlayScreen(
                 currentEpisodeName = state.selectedEpisode?.name ?: "",
                 hasPrevEpisode = state.hasPreviousEpisode,
                 hasNextEpisode = state.hasNextEpisode,
+                hasMultiQuality = state.playUrls.size > 1 || (state.playUrls.size == 1 && state.playUrls.first().name != "默认"),
                 isResolvingPlay = state.isResolvingPlay || (state.isLoading && !state.isAutoSearching),
                 isAutoSearching = state.isAutoSearching,
                 autoSearchMessage = state.autoSearchMessage,
@@ -159,12 +160,18 @@ fun DirectPlayScreen(
                 modifier = Modifier.fillMaxSize(),
             ) {
                 FullScreenEpisodeDrawer(
+                    flags = state.vod?.playFlags ?: emptyList(),
+                    currentFlag = state.selectedFlag,
                     episodes = state.selectedFlag?.episodes ?: emptyList(),
                     currentEpisode = state.selectedEpisode,
                     isReversed = state.isEpisodeReversed,
                     isCompactEpisodeTitle = state.isCompactEpisodeTitle,
                     onToggleSort = { viewModel.toggleEpisodeSort() },
                     onToggleCompact = { viewModel.toggleEpisodeCompact() },
+                    onSelectFlag = { flag -> viewModel.selectFlag(flag, playImmediately = true) },
+                    playUrls = state.playUrls,
+                    selectedPlayUrl = state.selectedPlayUrl,
+                    onSelectPlayUrl = { viewModel.selectPlayUrl(it) },
                     onSelectEpisode = { ep ->
                         viewModel.selectEpisode(ep)
                         showFullscreenEpisodeDrawer = false

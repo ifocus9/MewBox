@@ -53,6 +53,19 @@ private const val GESTURE_SEEK_FULL_SWIPE_MS = 90_000L
 /** 长按屏幕时的临时倍速 */
 private const val LONG_PRESS_BOOST_SPEED = 3.0f
 
+/** 双指缩放倍率范围：以画面中心为锚点放大，1x 为原始画面；放大为纹理插值，不提升清晰度 */
+private const val MIN_ZOOM_SCALE = 1f
+private const val MAX_ZOOM_SCALE = 4f
+
+/**
+ * 字幕下移的安全边界：字幕文字底边最多到「屏幕底部 − 此值」，超过就不再继续下移。
+ * 调大 → 字幕更靠上、最大下移量更小；调小 → 允许更贴底。只在横屏缩放时有意义。
+ */
+private const val SUBTITLE_BOTTOM_SAFE_MARGIN_DP = 12f
+
+/** Media3 SubtitleView 默认底部内边距 0.08f（javap 验证），文字底边约在 View 高度的 92% 处 */
+private const val SUBTITLE_TEXT_BOTTOM_FRACTION = 0.92f
+
 /** 手势亮度下限：避免把背光压到 0 导致整屏全黑 */
 private const val MIN_GESTURE_BRIGHTNESS = 0.01f
 
@@ -101,6 +114,7 @@ fun VideoPlayerViewport(
     currentEpisodeName: String,
     hasPrevEpisode: Boolean,
     hasNextEpisode: Boolean,
+    hasMultiQuality: Boolean = false,
     isResolvingPlay: Boolean,
     isAutoSearching: Boolean,
     autoSearchMessage: String?,
@@ -188,6 +202,16 @@ fun VideoPlayerViewport(
     // 长按倍速播放：boost 期间显示提示，松手恢复按下前的倍速
     var isBoostPlaying by remember { mutableStateOf(false) }
     var speedBeforeBoost by remember { mutableFloatStateOf(1f) }
+
+    // 双指缩放：纯播放会话内状态，不落 DataStore、不跨集保持。
+    // 换源 / 换集（播放地址或集名变化）时倍率与手势基准一并复位到 1x，
+    // 避免上一集的放大倍率被带到下一集，也避免手势进行中换集留下脏基准。
+    var zoomScale by remember { mutableFloatStateOf(MIN_ZOOM_SCALE) }
+    var zoomGestureBase by remember { mutableFloatStateOf(MIN_ZOOM_SCALE) }
+    LaunchedEffect(playerState.playUrl, currentEpisodeName) {
+        zoomScale = MIN_ZOOM_SCALE
+        zoomGestureBase = MIN_ZOOM_SCALE
+    }
 
     // 组件被回收或离开播放页面时，确保恢复倍速
     DisposableEffect(Unit) {
@@ -277,9 +301,31 @@ fun VideoPlayerViewport(
                 }
             },
             update = { pv ->
+                // View 默认 pivot 即 (width/2, height/2)，天然从画面中心缩放；
+                // 变换只作用于最底层 PlayerView，上层 Compose 控制栏 / HUD 不受影响
+                pv.scaleX = zoomScale
+                pv.scaleY = zoomScale
                 pv.resizeMode = playerState.resizeMode
                 pv.keepScreenOn = shouldKeepScreenOn
                 pv.subtitleView?.let { subView ->
+                    // 缩放抵消：pivot 固定在 View 中心，S(s)·S(1/s) = I，字幕字号与水平位置恒定不变
+                    val h = subView.height.toFloat()
+                    subView.pivotX = subView.width / 2f
+                    subView.pivotY = h / 2f
+                    val inverseScale = 1f / zoomScale
+                    subView.scaleX = inverseScale
+                    subView.scaleY = inverseScale
+
+                    // 只做垂直位移：理论下移量 (s−1)·h/2，但文字底边不得越过「屏幕底部 − 安全边距」。
+                    // contentFrame 在 pv 内居中，故文字底边原始屏幕 y = (pv.h − h)/2 + 0.92h。
+                    // translation 位于父局部坐标系，经 pv 的 S(s) 后放大为屏幕空间位移，因此要除以 zoomScale。
+                    // 仅对播放器渲染的软字幕有效（烧录硬字幕是画面像素，不受影响）。
+                    val safePx = SUBTITLE_BOTTOM_SAFE_MARGIN_DP * subView.resources.displayMetrics.density
+                    val windowH = pv.height.toFloat()
+                    val textBottom = (windowH - h) / 2f + SUBTITLE_TEXT_BOTTOM_FRACTION * h
+                    val maxShift = (windowH - safePx - textBottom).coerceAtLeast(0f)
+                    val desiredShift = (zoomScale - 1f) * 0.5f * h
+                    subView.translationY = minOf(desiredShift, maxShift) / zoomScale
                     if (isLandscape) {
                         subView.setFractionalTextSize(SubtitleView.DEFAULT_TEXT_SIZE_FRACTION)
                     } else {
@@ -386,6 +432,12 @@ fun VideoPlayerViewport(
                         onVolumeEnd = {
                             isVolumeAdjusting = false
                         },
+                        onZoomStart = {
+                            zoomGestureBase = zoomScale
+                        },
+                        onZoomChange = { factor ->
+                            zoomScale = (zoomGestureBase * factor).coerceIn(MIN_ZOOM_SCALE, MAX_ZOOM_SCALE)
+                        },
                     )
                 },
         )
@@ -440,6 +492,7 @@ fun VideoPlayerViewport(
             currentEpisodeName = currentEpisodeName,
             hasPrevEpisode = hasPrevEpisode,
             hasNextEpisode = hasNextEpisode,
+            hasMultiQuality = hasMultiQuality,
             onBack = onBack,
             onShowMediaInfo = { showInfoDialog = true },
             onPlayPauseToggle = onPlayPauseToggle,

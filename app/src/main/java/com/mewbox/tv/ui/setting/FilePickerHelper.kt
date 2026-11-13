@@ -110,6 +110,7 @@ object FilePickerHelper {
             val ext = when {
                 rawName.contains(".") -> ""
                 mimeType.contains("html", ignoreCase = true) -> ".html"
+                mimeType.contains("zip", ignoreCase = true) -> ".zip"
                 else -> ".json"
             }
             val fileName = rawName.ifBlank { "subscription_${System.currentTimeMillis()}" } + ext

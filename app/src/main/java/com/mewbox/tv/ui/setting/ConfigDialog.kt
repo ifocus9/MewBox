@@ -4,11 +4,7 @@ import android.Manifest
 import com.mewbox.tv.util.AppToast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -33,7 +29,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -150,8 +145,7 @@ fun ConfigDialog(
                         value = name,
                         onValueChange = { name = it },
                         modifier = Modifier.fillMaxWidth(),
-                        label = { Text("订阅名称", fontSize = 13.sp) },
-                        placeholder = { Text("留空则以订阅链接作为名称", color = Color(0xFF8A8F98), fontSize = 14.sp) },
+                        placeholder = { Text("订阅名称（留空则用链接）", color = Color(0xFF8A8F98), fontSize = 13.sp) },
                         singleLine = true,
                         shape = RoundedCornerShape(10.dp),
                         trailingIcon = {
@@ -177,61 +171,50 @@ fun ConfigDialog(
                     Spacer(Modifier.height(10.dp))
                 }
 
-                // 地址输入框与文件夹图标按钮并排展示
-                Row(
+                // 地址输入框独占整行：清除 / 本地文件收成紧凑尾图标，避免长链接被右侧方块挤成多行
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = { url = it },
                     modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    OutlinedTextField(
-                        value = url,
-                        onValueChange = { url = it },
-                        modifier = Modifier.weight(1f),
-                        label = if (isEdit) ({ Text("配置地址或 JSON", fontSize = 13.sp) }) else null,
-                        placeholder = { Text("请输入配置地址或 JSON", color = Color(0xFF8A8F98), fontSize = 14.sp) },
-                        maxLines = 4,
-                        shape = RoundedCornerShape(10.dp),
-                        trailingIcon = {
+                    placeholder = { Text("请输入配置地址", color = Color(0xFF8A8F98), fontSize = 14.sp) },
+                    maxLines = 3,
+                    shape = RoundedCornerShape(10.dp),
+                    trailingIcon = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
                             if (url.isNotEmpty()) {
-                                IconButton(onClick = { url = "" }) {
+                                IconButton(
+                                    onClick = { url = "" },
+                                    modifier = Modifier.size(32.dp),
+                                ) {
                                     Icon(
                                         imageVector = Icons.Default.Clear,
                                         contentDescription = "清除地址",
                                         tint = Color(0xFF8E8E93),
-                                        modifier = Modifier.size(18.dp),
+                                        modifier = Modifier.size(16.dp),
                                     )
                                 }
                             }
-                        },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = BluePrimary,
-                            unfocusedBorderColor = Color(0xFFDADCE0),
-                            focusedContainerColor = Color.White,
-                            unfocusedContainerColor = Color.White,
-                            cursorColor = BluePrimary,
-                        ),
-                    )
-
-                    Spacer(Modifier.width(8.dp))
-
-                    Box(
-                        modifier = Modifier
-                            .size(48.dp)
-                            .background(Color(0xFFF2F4F7), RoundedCornerShape(10.dp))
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
+                            IconButton(
                                 onClick = onPickFileClick,
-                            ),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.FolderOpen,
-                            contentDescription = "选择本地文件",
-                            tint = Color(0xFF8E8E93),
-                            modifier = Modifier.size(24.dp),
-                        )
-                    }
-                }
+                                modifier = Modifier.size(32.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.FolderOpen,
+                                    contentDescription = "选择本地文件",
+                                    tint = Color(0xFF8E8E93),
+                                    modifier = Modifier.size(24.dp),
+                                )
+                            }
+                        }
+                    },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = BluePrimary,
+                        unfocusedBorderColor = Color(0xFFDADCE0),
+                        focusedContainerColor = Color.White,
+                        unfocusedContainerColor = Color.White,
+                        cursorColor = BluePrimary,
+                    ),
+                )
 
                 Spacer(Modifier.height(18.dp))
 

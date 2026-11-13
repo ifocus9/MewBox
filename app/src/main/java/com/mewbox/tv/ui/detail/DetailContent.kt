@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.lazy.LazyColumn
@@ -18,6 +20,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.AltRoute
+import androidx.compose.material.icons.filled.HighQuality
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -28,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import com.mewbox.tv.api.tmdb.bean.TmdbDetail
 import com.mewbox.tv.bean.Episode
 import com.mewbox.tv.bean.Flag
+import com.mewbox.tv.bean.PlayUrl
 import com.mewbox.tv.bean.Vod
 
 /**
@@ -49,11 +54,15 @@ fun DetailContent(
     currentSiteKey: String,
     currentSourceName: String,
     resumeEpisodeText: String?,
+    playUrls: List<PlayUrl> = emptyList(),
+    selectedPlayUrl: PlayUrl? = null,
+    isResolvingPlay: Boolean = false,
     onPlay: () -> Unit,
     onToggleReverse: () -> Unit,
     onToggleCompact: () -> Unit,
     onSelectEpisode: (Episode) -> Unit,
     onSelectFlag: (Flag) -> Unit,
+    onSelectPlayUrl: (PlayUrl) -> Unit = {},
     onSelectSource: (Vod) -> Unit,
     quickBackdrop: String? = null,
     quickPoster: String? = null,
@@ -147,7 +156,77 @@ fun DetailContent(
             }
         }
 
-        // 4. 换源栏（展示多站同名源或正在检索换源）
+        // 4. 画质切换栏（对齐 FongMi / AVBox）
+        val hasMeaningfulQualities = playUrls.size > 1 || (playUrls.size == 1 && playUrls.first().name != "默认")
+        if (hasMeaningfulQualities || (isResolvingPlay && playUrls.isEmpty())) {
+            item(key = "quality") {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 16.dp),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
+                    ) {
+                        SectionTitleIcon(Icons.Default.HighQuality)
+                        Text(
+                            text = "画质",
+                            style = MaterialTheme.typography.titleLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(start = 8.dp),
+                        )
+                        if (isResolvingPlay && playUrls.isEmpty()) {
+                            Spacer(Modifier.width(10.dp))
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = "获取中...",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        } else {
+                            Spacer(Modifier.weight(1f))
+                            val currentQualityName = selectedPlayUrl?.name ?: playUrls.firstOrNull()?.name
+                            if (!currentQualityName.isNullOrBlank()) {
+                                Text(
+                                    text = currentQualityName,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier
+                                        .padding(start = 12.dp)
+                                        .widthIn(max = 180.dp),
+                                )
+                            }
+                        }
+                    }
+                    if (hasMeaningfulQualities) {
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            itemsIndexed(playUrls, key = { index, p -> "${index}_${p.name}_${p.url}" }) { _, playUrl ->
+                                QualityCard(
+                                    name = playUrl.name,
+                                    selected = playUrl == selectedPlayUrl || playUrl.url == selectedPlayUrl?.url,
+                                    onClick = { onSelectPlayUrl(playUrl) },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 5. 换源栏（展示多站同名源或正在检索换源）
         if (changeSources.isNotEmpty() || isSearchingChangeSources) {
             item(key = "sources") {
                 SourceSection(

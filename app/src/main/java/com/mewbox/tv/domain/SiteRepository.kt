@@ -16,6 +16,7 @@ import com.mewbox.tv.db.TrackDao
 import com.mewbox.tv.ui.web.WebActivity
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.channels.ProducerScope
@@ -24,6 +25,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -260,25 +263,39 @@ class SiteRepository @Inject constructor(
         }
     }
 
-    fun observeHistories(configUrl: String? = null): Flow<List<History>> =
-        if (configUrl.isNullOrBlank()) {
-            historyDao.observeAll()
-        } else {
-            historyDao.observeByConfig(configUrl)
+    suspend fun getActiveConfigId(): String = withContext(Dispatchers.IO) {
+        val cached = settingsRepository.currentConfigId
+        if (cached.isNotBlank()) return@withContext cached
+        val activeUrl = settingsRepository.currentConfigUrl.ifBlank {
+            settingsRepository.configUrlFlow.first()
+        }
+        val config = if (activeUrl.isNotBlank()) configDao.find(activeUrl) else configDao.latest()
+        val id = config?.id.orEmpty()
+        if (id.isNotBlank()) {
+            settingsRepository.setConfigId(id)
+        }
+        id
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun observeHistories(configId: String? = null, configUrl: String? = null): Flow<List<History>> =
+        when {
+            !configId.isNullOrBlank() -> historyDao.observeByConfig(configId)
+            !configUrl.isNullOrBlank() -> configDao.observeByUrl(configUrl).flatMapLatest { config ->
+                val id = config?.id.orEmpty()
+                if (id.isNotBlank()) historyDao.observeByConfig(id) else flowOf(emptyList())
+            }
+            else -> historyDao.observeAll()
         }
 
-    suspend fun getHistory(siteKey: String, vodId: String, configUrl: String = ""): History? = withContext(Dispatchers.IO) {
+    suspend fun getHistory(siteKey: String, vodId: String, configId: String = ""): History? = withContext(Dispatchers.IO) {
         if (siteKey == WebHomeInlineStore.KEY) {
             webHomeInlineStore.consumeInitialHistory(vodId)?.let { return@withContext it }
         }
-        val targetConfigUrl = configUrl.ifBlank {
-            settingsRepository.currentConfigUrl.ifBlank {
-                settingsRepository.configUrlFlow.first()
-            }
-        }
-        if (targetConfigUrl.isNotBlank()) {
-            historyDao.get(History.key(siteKey, vodId, targetConfigUrl))
-                ?: historyDao.find(targetConfigUrl, siteKey, vodId)
+        val targetConfigId = configId.ifBlank { getActiveConfigId() }
+        if (targetConfigId.isNotBlank()) {
+            historyDao.get(History.key(siteKey, vodId, targetConfigId))
+                ?: historyDao.find(targetConfigId, siteKey, vodId)
                 ?: historyDao.get(History.key(siteKey, vodId))
         } else {
             historyDao.get(History.key(siteKey, vodId))
@@ -286,27 +303,26 @@ class SiteRepository @Inject constructor(
     }
 
     suspend fun saveHistory(history: History) = withContext(Dispatchers.IO) {
-        val finalConfigUrl = if (history.configUrl.isNotBlank()) {
-            history.configUrl
-        } else {
+        val finalConfigId = history.configId.ifBlank { getActiveConfigId() }
+        val finalConfigUrl = history.configUrl.ifBlank {
             settingsRepository.currentConfigUrl.ifBlank {
                 settingsRepository.configUrlFlow.first()
             }
         }
-        val finalConfigName = if (history.configName.isNotBlank()) {
-            history.configName
-        } else if (finalConfigUrl.isNotBlank()) {
-            configDao.find(finalConfigUrl)?.desc.orEmpty()
-        } else {
-            ""
+        val finalConfigName = when {
+            history.configName.isNotBlank() -> history.configName
+            finalConfigId.isNotBlank() -> configDao.findById(finalConfigId)?.desc.orEmpty()
+            finalConfigUrl.isNotBlank() -> configDao.find(finalConfigUrl)?.desc.orEmpty()
+            else -> ""
         }
         val finalKey = if (history.key.isBlank() || history.key == History.key(history.siteKey, history.vodId)) {
-            History.key(history.siteKey, history.vodId, finalConfigUrl)
+            History.key(history.siteKey, history.vodId, finalConfigId)
         } else {
             history.key
         }
         val toSave = history.copy(
             key = finalKey,
+            configId = finalConfigId,
             configUrl = finalConfigUrl,
             configName = finalConfigName,
         )
@@ -318,12 +334,12 @@ class SiteRepository @Inject constructor(
         trackDao.deleteByKey(key)
     }
 
-    suspend fun clearHistories(configUrl: String? = null) = withContext(Dispatchers.IO) {
-        if (configUrl.isNullOrBlank()) {
+    suspend fun clearHistories(configId: String? = null) = withContext(Dispatchers.IO) {
+        if (configId.isNullOrBlank()) {
             historyDao.clear()
             trackDao.clear()
         } else {
-            historyDao.clearByConfig(configUrl)
+            historyDao.clearWithTracksByConfig(configId)
         }
     }
 

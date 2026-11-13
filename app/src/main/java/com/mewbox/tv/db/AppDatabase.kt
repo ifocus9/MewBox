@@ -57,6 +57,12 @@ interface ConfigDao {
     @Query("SELECT * FROM config WHERE url = :url LIMIT 1")
     suspend fun find(url: String): Config?
 
+    @Query("SELECT * FROM config WHERE url = :url LIMIT 1")
+    fun observeByUrl(url: String): Flow<Config?>
+
+    @Query("SELECT * FROM config WHERE id = :id LIMIT 1")
+    suspend fun findById(id: String): Config?
+
     @Query("UPDATE config SET name = :name WHERE url = :url")
     suspend fun updateName(url: String, name: String)
 
@@ -81,14 +87,14 @@ interface HistoryDao {
     @Query("SELECT * FROM history ORDER BY updatedAt DESC")
     fun observeAll(): Flow<List<History>>
 
-    @Query("SELECT * FROM history WHERE configUrl = :configUrl ORDER BY updatedAt DESC")
-    fun observeByConfig(configUrl: String): Flow<List<History>>
+    @Query("SELECT * FROM history WHERE configId = :configId ORDER BY updatedAt DESC")
+    fun observeByConfig(configId: String): Flow<List<History>>
 
     @Query("SELECT * FROM history WHERE `key` = :key")
     suspend fun get(key: String): History?
 
-    @Query("SELECT * FROM history WHERE configUrl = :configUrl AND siteKey = :siteKey AND vodId = :vodId LIMIT 1")
-    suspend fun find(configUrl: String, siteKey: String, vodId: String): History?
+    @Query("SELECT * FROM history WHERE configId = :configId AND siteKey = :siteKey AND vodId = :vodId LIMIT 1")
+    suspend fun find(configId: String, siteKey: String, vodId: String): History?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(history: History)
@@ -96,8 +102,17 @@ interface HistoryDao {
     @Query("DELETE FROM history WHERE `key` = :key")
     suspend fun delete(key: String)
 
-    @Query("DELETE FROM history WHERE configUrl = :configUrl")
-    suspend fun clearByConfig(configUrl: String)
+    @Query("DELETE FROM history WHERE configId = :configId")
+    suspend fun clearByConfig(configId: String)
+
+    @Query("DELETE FROM track_preference WHERE `key` IN (SELECT `key` FROM history WHERE configId = :configId) OR `key` LIKE :configId || '\\_%' ESCAPE '\\'")
+    suspend fun clearTrackPreferencesByConfig(configId: String)
+
+    @Transaction
+    suspend fun clearWithTracksByConfig(configId: String) {
+        clearTrackPreferencesByConfig(configId)
+        clearByConfig(configId)
+    }
 
     @Query("DELETE FROM history")
     suspend fun clear()
@@ -124,7 +139,7 @@ interface TrackDao {
     suspend fun clear()
 }
 
-@Database(entities = [Config::class, Site::class, History::class, TrackPreference::class], version = 7, exportSchema = true)
+@Database(entities = [Config::class, Site::class, History::class, TrackPreference::class], version = 8, exportSchema = true)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun siteDao(): SiteDao
     abstract fun configDao(): ConfigDao
@@ -189,6 +204,46 @@ abstract class AppDatabase : RoomDatabase() {
                         `updatedAt` INTEGER NOT NULL DEFAULT 0,
                         PRIMARY KEY(`key`, `type`)
                     )
+                    """.trimIndent()
+                )
+            }
+        }
+
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE config ADD COLUMN id TEXT NOT NULL DEFAULT ''")
+                db.execSQL("UPDATE config SET id = lower(hex(randomblob(16))) WHERE id = ''")
+                db.execSQL("ALTER TABLE history ADD COLUMN configId TEXT NOT NULL DEFAULT ''")
+                db.execSQL(
+                    """
+                    UPDATE history
+                    SET configId = COALESCE(
+                        (SELECT id FROM config WHERE config.url = history.configUrl LIMIT 1),
+                        ''
+                    )
+                    WHERE configUrl != ''
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    UPDATE track_preference
+                    SET `key` = COALESCE(
+                        (
+                            SELECT h.configId || '_' || h.siteKey || '_' || h.vodId
+                            FROM history h
+                            WHERE h.`key` = track_preference.`key`
+                              AND h.configId != ''
+                            LIMIT 1
+                        ),
+                        `key`
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    UPDATE history
+                    SET `key` = configId || '_' || siteKey || '_' || vodId
+                    WHERE configId != ''
                     """.trimIndent()
                 )
             }

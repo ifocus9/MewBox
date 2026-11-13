@@ -62,19 +62,19 @@ import androidx.compose.material3.MaterialTheme
 val EpisodePanelColor = Color(0xE6101118)
 
 /** 胶囊按钮：selector_player_panel_group_tab */
-private val PillColor = Color(0x22FFFFFF)
-private val PillBorderColor = Color(0x33FFFFFF)
+internal val PillColor = Color(0x22FFFFFF)
+internal val PillBorderColor = Color(0x33FFFFFF)
 
-private val PanelTextPrimary = Color.White
+internal val PanelTextPrimary = Color.White
 
 /** 选集抽屉固定采用系统主色，不联动海报主题色 */
-private val panelAccent: Color = BluePrimary
+internal val PanelAccent: Color = BluePrimary
 
 /** 次要文字（共N条 / 全N集）：@color/selector_player_panel_tab_text */
-private val PanelTextMeta = Color(0x99FFFFFF)
+internal val PanelTextMeta = Color(0x99FFFFFF)
 
-private val PanelShape = RoundedCornerShape(6.dp)
-private val PillShape = RoundedCornerShape(6.dp)
+internal val PanelShape = RoundedCornerShape(6.dp)
+internal val PillShape = RoundedCornerShape(6.dp)
 
 /** 长标题阈值，与 MewPlayer EpisodeAdapter.LONG_TITLE_LENGTH 一致：到这一档就切成两行、两列。 */
 private const val LONG_TITLE_LENGTH = 12
@@ -287,7 +287,7 @@ private fun EpisodePickerPill(
     onClick: () -> Unit,
     icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
 ) {
-    val accent = panelAccent
+    val accent = PanelAccent
     Surface(
         shape = PillShape,
         color = PillColor,
@@ -326,7 +326,7 @@ private fun EpisodeGroupTabs(
     horizontalPadding: Dp,
     onSelect: (EpisodeGroup) -> Unit,
 ) {
-    val accent = panelAccent
+    val accent = PanelAccent
     // 滚到底时用最后一段，保证最后一段能被选中；未完成布局时 canScrollForward 也是 false，这里用 firstVisible 兜底
     val firstVisible = gridState.firstVisibleItemIndex
     val atEnd = !gridState.canScrollForward && firstVisible > 0
@@ -381,7 +381,7 @@ private fun EpisodeGridCell(
     multiLine: Boolean,
     onClick: () -> Unit,
 ) {
-    val accent = panelAccent
+    val accent = PanelAccent
     Box(
         modifier = Modifier
             .fillMaxWidth()

@@ -298,6 +298,9 @@ fun DetailScreen(
                             currentSiteKey = state.currentSite?.key ?: "",
                             currentSourceName = state.currentSite?.name ?: "",
                             resumeEpisodeText = state.resumeEpisodeText,
+                            playUrls = state.playUrls,
+                            selectedPlayUrl = state.selectedPlayUrl,
+                            isResolvingPlay = state.isResolvingPlay,
                             onPlay = {
                                 viewModel.startPlayback()
                                 enterPlayer()
@@ -309,6 +312,7 @@ fun DetailScreen(
                                 enterPlayer()
                             },
                             onSelectFlag = { flag -> viewModel.selectFlag(flag) },
+                            onSelectPlayUrl = { playUrl -> viewModel.selectPlayUrl(playUrl) },
                             onSelectSource = { targetVod -> viewModel.changeSource(targetVod, shouldAutoPlay = false) },
                             quickBackdrop = state.quickBackdrop,
                             quickPoster = state.quickPoster,
@@ -372,6 +376,7 @@ fun DetailScreen(
                                 currentEpisodeName = state.selectedEpisode?.name ?: "",
                                 hasPrevEpisode = state.hasPreviousEpisode,
                                 hasNextEpisode = state.hasNextEpisode,
+                                hasMultiQuality = state.playUrls.size > 1 || (state.playUrls.size == 1 && state.playUrls.first().name != "默认"),
                                 isResolvingPlay = state.isResolvingPlay,
                                 isAutoSearching = state.isAutoSearching,
                                 autoSearchMessage = state.autoSearchMessage,
@@ -402,12 +407,18 @@ fun DetailScreen(
                                 modifier = Modifier.fillMaxSize(),
                             ) {
                                 FullScreenEpisodeDrawer(
+                                    flags = state.vod?.playFlags ?: emptyList(),
+                                    currentFlag = state.selectedFlag,
                                     episodes = state.selectedFlag?.episodes ?: emptyList(),
                                     currentEpisode = state.selectedEpisode,
                                     isReversed = state.isEpisodeReversed,
                                     isCompactEpisodeTitle = state.isCompactEpisodeTitle,
                                     onToggleSort = { viewModel.toggleEpisodeSort() },
                                     onToggleCompact = { viewModel.toggleEpisodeCompact() },
+                                    onSelectFlag = { flag -> viewModel.selectFlag(flag, playImmediately = true) },
+                                    playUrls = state.playUrls,
+                                    selectedPlayUrl = state.selectedPlayUrl,
+                                    onSelectPlayUrl = { viewModel.selectPlayUrl(it) },
                                     onSelectEpisode = {
                                         viewModel.selectEpisode(it)
                                         showFullscreenEpisodeDrawer = false
