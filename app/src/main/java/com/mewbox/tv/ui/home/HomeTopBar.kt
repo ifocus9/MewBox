@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -40,7 +39,6 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 /**
  * 首页顶部操作栏：
  * - 左侧 siteCapsule 站点选择胶囊（带圆角/阴影/Logo/展开箭头），自适应液态玻璃与拟态玻璃
- * - 右侧搜索图标 (🔍)
  */
 @Composable
 fun HomeTopBar(
@@ -49,7 +47,6 @@ fun HomeTopBar(
     onSiteClick: () -> Unit,
     onSiteLongClick: () -> Unit,
     onLogoClick: () -> Unit,
-    onSearchClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -123,22 +120,6 @@ fun HomeTopBar(
             contentAlignment = Alignment.Center,
         ) {
             siteCapsuleContent()
-        }
-
-        // 右侧操作图标：搜索(🔍)
-        Box(
-            modifier = Modifier
-                .size(38.dp)
-                .glassTopBarSurface(CircleShape, MaterialTheme.colorScheme.surfaceBright)
-                .clickable { onSearchClick() },
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = Icons.Default.Search,
-                contentDescription = "搜索",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(22.dp),
-            )
         }
     }
 }

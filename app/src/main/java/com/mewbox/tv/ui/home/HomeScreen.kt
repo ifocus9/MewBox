@@ -58,7 +58,7 @@ import kotlinx.coroutines.launch
 
 /**
  * 首页点播界面（严格对齐 MewPlayer fragment_vod.xml 风格与截图细节）
- * - 顶部 Toolbar：左侧站点选择胶囊（带圆角/阴影/Logo/箭头），右侧仅保留搜索(🔍)
+ * - 顶部 Toolbar：左侧站点选择胶囊（带圆角/阴影/Logo/箭头）
  * - 分类导航条：横向滑动，选中文字高亮蓝色 + 下方蓝色滑条指示器，右侧 4 个小方块分类菜单按钮
  * - 视频网格：3 列瀑布流网格，卡片右上角橙色备注标签，片名居中单行排布
  * - 浮动回到顶部按钮 (FAB)
@@ -75,7 +75,7 @@ fun HomeScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var showSiteDialog by remember { mutableStateOf(false) }
-    var showTypeSheet by remember { mutableStateOf(false) }
+    var showFilterSheet by remember { mutableStateOf(false) }
     var showConfigDialog by remember { mutableStateOf(false) }
 
     val scope = rememberCoroutineScope()
@@ -95,11 +95,27 @@ fun HomeScreen(
 
     // 记忆每个分类最近展示的影片列表，确保在 Tab 转场退场动画的短暂时间里，旧页面不会突变成新分类的数据
     val displayedItemsByClass = remember { mutableStateMapOf<String, List<Vod>>() }
+    val appliedFiltersSnapshot = remember { mutableMapOf<String, Map<String, String>>() }
 
-    // 站点切换时清空历史分类快照和各分类的滚动状态
+    // 站点切换时清空历史分类快照、筛选快照和各分类的滚动状态
     LaunchedEffect(state.currentSite?.key) {
         displayedItemsByClass.clear()
         gridStates.clear()
+        appliedFiltersSnapshot.clear()
+        showFilterSheet = false
+    }
+
+    // 筛选条件变化时将当前分类列表回到顶部，避免旧滚动位置引起列表偏移或误分页
+    val currentFilters = state.currentFilters
+    val currentSelectedFilters = state.currentSelectedFilters
+    LaunchedEffect(state.selectedClassId, currentSelectedFilters) {
+        val classId = state.selectedClassId
+        if (classId.isEmpty()) return@LaunchedEffect
+        val previous = appliedFiltersSnapshot[classId]
+        if (previous != null && previous != currentSelectedFilters) {
+            gridStates[classId]?.scrollToItem(0)
+        }
+        appliedFiltersSnapshot[classId] = currentSelectedFilters
     }
 
     // 及时缓存当前分类的影片数据，供分类切换退场动画展示，避免旧页面在退场时突变为新分类数据
@@ -171,7 +187,6 @@ fun HomeScreen(
                     AppToast.show("没有可切换的订阅")
                 }
             },
-            onSearchClick = { onNavigateToSearch("") },
         )
 
         if (state.classes.isNotEmpty()) {
@@ -180,6 +195,8 @@ fun HomeScreen(
                 classes = state.classes,
                 selectedClassId = state.selectedClassId,
                 tabListState = tabListState,
+                showFilterButton = currentFilters.isNotEmpty(),
+                hasActiveFilters = currentSelectedFilters != state.currentDefaultFilters,
                 onClassClick = { classId, isAlreadySelected ->
                     if (isAlreadySelected) {
                         scope.launch { currentGridState.animateScrollToItem(0) }
@@ -187,7 +204,7 @@ fun HomeScreen(
                         viewModel.selectClass(classId)
                     }
                 },
-                onTypeMoreClick = { showTypeSheet = true },
+                onFilterClick = { showFilterSheet = true },
             )
 
             // 3. 当前分类下的主体内容展示区与网格（支持下拉刷新与平滑分类切换动画）
@@ -314,7 +331,7 @@ fun HomeScreen(
                     onClick = { scope.launch { currentGridState.animateScrollToItem(0) } },
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
-                        .padding(end = 16.dp, bottom = 86.dp),
+                        .padding(end = 16.dp, bottom = 106.dp),
                 )
             }
         } else {
@@ -370,16 +387,19 @@ fun HomeScreen(
         )
     }
 
-    // 全部分类弹窗
-    if (showTypeSheet) {
+    // 筛选抽屉弹窗
+    if (showFilterSheet && currentFilters.isNotEmpty()) {
         TypeSheetDialog(
-            classes = state.classes,
-            selectedClassId = state.selectedClassId,
-            onSelect = { classId ->
-                viewModel.selectClass(classId)
-                showTypeSheet = false
+            filters = currentFilters,
+            selectedFilters = currentSelectedFilters,
+            showReset = currentSelectedFilters != state.currentDefaultFilters,
+            onSelectFilter = { filterKey, value ->
+                viewModel.selectFilter(filterKey, value)
             },
-            onDismiss = { showTypeSheet = false },
+            onReset = {
+                viewModel.resetFilters()
+            },
+            onDismiss = { showFilterSheet = false },
         )
     }
 }

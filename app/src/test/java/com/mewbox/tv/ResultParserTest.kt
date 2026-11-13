@@ -22,6 +22,45 @@ class ResultParserTest {
         val r = ResultParser.parseResult(sample("douban_home.json"))
         assertEquals(7, r.classes.size)
         assertEquals("hot_gaia", r.classes.first().typeId)
+        assertEquals(7, r.filters.size)
+        val hotFilters = r.filters["hot_gaia"]!!
+        assertEquals(2, hotFilters.size)
+        assertEquals("sort", hotFilters[0].key)
+        assertEquals("排序", hotFilters[0].name)
+        assertEquals(listOf("recommend", "time", "rank"), hotFilters[0].values.map { it.v })
+        val movieFilters = r.filters["movie"]!!
+        assertEquals(4, movieFilters.size)
+        assertEquals("全部类型", movieFilters[0].values.first().n)
+        assertEquals("", movieFilters[0].values.first().v)
+    }
+
+    @Test
+    fun filters_supportsObjectAndInlineClassAndDirtyInput() {
+        val json = """
+            {
+                "class": [
+                    {
+                        "type_id": "1",
+                        "type_name": "电影",
+                        "filters": [{"key": "year", "name": "年份", "init": "2026", "value": [{"n": "2026", "v": 2026}]}]
+                    },
+                    {"type_id": "2", "type_name": "剧集"}
+                ],
+                "filters": {
+                    "2": {"key": "area", "name": "地区", "value": [{"n": "大陆", "v": "大陆"}]},
+                    "empty": []
+                }
+            }
+        """.trimIndent()
+        val r = ResultParser.parseResult(json)
+        assertEquals(1, r.filters["1"]?.size)
+        assertEquals("2026", r.filters["1"]?.first()?.init)
+        assertEquals("2026", r.filters["1"]?.first()?.values?.first()?.v)
+        assertEquals("area", r.filters["2"]?.first()?.key)
+        assertFalse(r.filters.containsKey("empty"))
+
+        val dirty = ResultParser.parseResult("""{"filters": null, "class": []}""")
+        assertTrue(dirty.filters.isEmpty())
     }
 
     @Test

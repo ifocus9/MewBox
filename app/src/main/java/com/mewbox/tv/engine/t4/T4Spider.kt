@@ -9,6 +9,9 @@ import com.mewbox.tv.catvod.Spider
 import com.mewbox.tv.catvod.SpiderLoader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -29,15 +32,31 @@ class T4Spider(
 
     private fun Vod.tag() = copy(siteKey = site.key, siteName = site.name)
 
-    /** 首页：无参数请求（或 ac=home），返回 class / filters / 可选 list。 */
-    override suspend fun homeContent(filter: Boolean): Result = request(emptyMap())
+    /** 首页：无参数请求（或 filter=true），返回 class / filters / 可选 list。 */
+    override suspend fun homeContent(filter: Boolean): Result =
+        request(if (filter) mapOf("filter" to "true") else emptyMap())
 
     override suspend fun categoryContent(
         tid: String,
         pg: String,
         filter: Boolean,
         extend: Map<String, String>,
-    ): Result = request(mapOf("ac" to "list", "t" to tid, "pg" to pg))
+    ): Result {
+        val params = LinkedHashMap<String, String>(4)
+        params["ac"] = "list"
+        params["t"] = tid
+        params["pg"] = pg
+        if (extend.isNotEmpty()) {
+            val extJson = buildJsonObject {
+                for ((k, v) in extend) {
+                    put(k, v)
+                }
+            }.toString()
+            params["ext"] = Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(extJson.toByteArray(Charsets.UTF_8))
+        }
+        return request(params)
+    }
 
     override suspend fun detailContent(ids: List<String>): Result =
         request(mapOf("ac" to "detail", "ids" to ids.joinToString(",")))
@@ -45,7 +64,7 @@ class T4Spider(
     override suspend fun searchContent(keyword: String, quick: Boolean, pg: String): Result =
         request(mapOf("wd" to keyword, "quick" to if (quick) "1" else "0", "pg" to pg))
 
-    /** play_id 整体透传，仅由 Retrofit 做 URL 编码。 */
+    /** play_id 整体透传，仅由 OkHttp HttpUrl 做 URL 编码。 */
     override suspend fun playerContent(flag: String, id: String, vipFlags: List<String>): Result =
         request(mapOf("play" to id, "flag" to flag))
 }

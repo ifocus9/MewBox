@@ -35,12 +35,14 @@ class NodeBundle internal constructor(
     val configMd5: String,
     private var pending: Boolean = false,
     private val signingKey: String = "",
+    private val sharedDataDir: File? = null,
 ) {
     val index: File = File(root, "index.js")
     val config: File = File(root, "index.config.js")
     val data: File
         get() {
-            val dir = File(root.parentFile, "data")
+            // 优先使用全局共享 data 目录，避免切换或编辑订阅 URL 后丢失网盘 Cookie 等本地状态
+            val dir = sharedDataDir ?: File(root.parentFile, "data")
             if (!dir.exists()) dir.mkdirs()
             return dir
         }
@@ -85,6 +87,9 @@ class NodeBundle internal constructor(
         }
         private val SOURCE_LOCKS = ConcurrentHashMap<String, Any>()
         private val ACTIVE_LOAD = AtomicReference<LoadSession?>()
+        private val MIGRATION_LOCK = Any()
+
+        internal fun sharedDataDir(context: Context): File = File(context.filesDir, "nodejs/data")
 
         @JvmStatic
         fun isZip(source: String?): Boolean {
@@ -133,21 +138,25 @@ class NodeBundle internal constructor(
         @JvmStatic
         fun restore(context: Context, source: String): NodeBundle? {
             if (!isConfig(source)) return null
+            val sharedData = sharedDataDir(context)
+            migrateLegacyDataIfNeeded(context, sharedData)
             val key = Crypto.sha256(source)
             val sourceRoot = File(context.filesDir, "nodejs/bundles/$key")
             val active = File(sourceRoot, "active")
-            return restorePrevious(active)
+            return restorePrevious(active, sharedData)
         }
 
         @JvmStatic
         fun restoreLatest(context: Context): NodeBundle? {
+            val sharedData = sharedDataDir(context)
+            migrateLegacyDataIfNeeded(context, sharedData)
             val bundlesDir = File(context.filesDir, "nodejs/bundles")
             if (!bundlesDir.isDirectory) return null
             val candidates = bundlesDir.listFiles { file -> file.isDirectory } ?: return null
             return candidates
                 .sortedByDescending { it.lastModified() }
                 .firstNotNullOfOrNull { dir ->
-                    restorePrevious(File(dir, "active"))
+                    restorePrevious(File(dir, "active"), sharedData)
                 }
         }
 
@@ -158,13 +167,15 @@ class NodeBundle internal constructor(
             session: LoadSession,
             onDownload: (() -> Unit)? = null,
         ): NodeBundle {
+            val sharedData = sharedDataDir(context)
+            migrateLegacyDataIfNeeded(context, sharedData)
             val sourceRoot = File(context.filesDir, "nodejs/bundles/$key")
             val active = File(sourceRoot, "active")
-            val stored = restorePrevious(active)
+            val stored = restorePrevious(active, sharedData)
             pruneSourceRoot(sourceRoot)
 
             if (isZip(source)) {
-                return prepareZipInternal(source, sourceRoot, active, stored, session, onDownload)
+                return prepareZipInternal(source, sourceRoot, active, stored, sharedData, session, onDownload)
             }
 
             val indexLocation = companion(source, "index.js")
@@ -211,7 +222,7 @@ class NodeBundle internal constructor(
                 session.check()
                 commit(active, staging)
                 session.check()
-                return NodeBundle(active, indexMd5, configMd5, pending = true, signingKey = signingKey)
+                return NodeBundle(active, indexMd5, configMd5, pending = true, signingKey = signingKey, sharedDataDir = sharedData)
             } finally {
                 Path.clear(staging)
             }
@@ -487,7 +498,7 @@ class NodeBundle internal constructor(
             Path.clear(from)
         }
 
-        internal fun readBundle(root: File): NodeBundle? {
+        internal fun readBundle(root: File, sharedDataDir: File? = null): NodeBundle? {
             if (!root.isDirectory) return null
             val index = File(root, "index.js")
             val config = File(root, "index.config.js")
@@ -495,7 +506,7 @@ class NodeBundle internal constructor(
             val indexMd5 = Crypto.md5(index)
             val configMd5 = Crypto.md5(config)
             if (indexMd5.isEmpty() || configMd5.isEmpty()) return null
-            return NodeBundle(root, indexMd5, configMd5)
+            return NodeBundle(root, indexMd5, configMd5, sharedDataDir = sharedDataDir)
         }
 
         private fun copyDirectory(source: File, target: File) {
@@ -527,15 +538,102 @@ class NodeBundle internal constructor(
          * 读取已落地的资源包。active 不完整时（上一次 commit 搬到一半崩了、
          * 或新包本身有问题）自动用 previous 顶上，避免直接无包可用。
          */
-        internal fun restorePrevious(active: File): NodeBundle? {
-            readBundle(active)?.let { return it }
+        internal fun restorePrevious(active: File, sharedDataDir: File? = null): NodeBundle? {
+            readBundle(active, sharedDataDir)?.let { return it }
             val parent = active.parentFile ?: return null
             val previous = File(parent, "previous")
-            val fallback = readBundle(previous) ?: return null
+            val fallback = readBundle(previous, sharedDataDir) ?: return null
             Timber.i("Node bundle active 不完整，回退到 previous 版本")
             Path.clear(active)
             moveOrCopy(previous, active)
-            return readBundle(active)
+            return readBundle(active, sharedDataDir)
+        }
+
+        /**
+         * 兼容升级迁移：旧版本将 db.json 与 profile.json 隔离在 bundles/<sha256>/ 下，
+         * 当全局共享文件尚不存在时自动从旧包中迁出，优先保留包含网盘 Cookie 配置的 db.json。
+         */
+        private fun migrateLegacyDataIfNeeded(context: Context, sharedData: File) {
+            synchronized(MIGRATION_LOCK) {
+                val bundlesDir = File(context.filesDir, "nodejs/bundles")
+                if (!bundlesDir.isDirectory) return
+                val bundleDirs = bundlesDir.listFiles { file -> file.isDirectory }
+                    ?.sortedByDescending { it.lastModified() }
+                    ?: return
+                if (bundleDirs.isEmpty()) return
+
+                migrateLegacyDbFile(bundleDirs, File(sharedData, "db.json"))
+                migrateLegacyExtraData(bundleDirs, sharedData)
+                val sharedProfile = File(sharedData.parentFile, "profile.json")
+                migrateLegacyProfile(bundleDirs, sharedProfile)
+            }
+        }
+
+        private fun migrateLegacyDbFile(bundleDirs: List<File>, targetDb: File) {
+            if (targetDb.isFile && targetDb.length() > 0L) return
+            val candidates = bundleDirs
+                .map { File(it, "data/db.json") }
+                .filter { it.isFile && it.length() > 0L }
+            val chosen = candidates
+                .sortedWith(
+                    compareByDescending<File> { containsCookieSetting(it) }
+                        .thenByDescending { it.lastModified() }
+                )
+                .firstOrNull()
+                ?: return
+            copyFileSafely(chosen, targetDb, "db.json")
+        }
+
+        private fun containsCookieSetting(dbFile: File): Boolean {
+            return try {
+                dbFile.readText(StandardCharsets.UTF_8).contains("\"cookie\"", ignoreCase = true)
+            } catch (_: IOException) {
+                false
+            }
+        }
+
+        private fun migrateLegacyExtraData(bundleDirs: List<File>, sharedData: File) {
+            for (bundleDir in bundleDirs) {
+                val legacyDataDir = File(bundleDir, "data")
+                if (!legacyDataDir.isDirectory) continue
+                val children = legacyDataDir.listFiles() ?: continue
+                for (child in children) {
+                    if (child.name == "db.json") continue
+                    val target = File(sharedData, child.name)
+                    if (target.exists()) continue
+                    try {
+                        if (!sharedData.exists() && !sharedData.mkdirs()) return
+                        copyDirectory(child, target)
+                    } catch (e: IOException) {
+                        Timber.w(e, "迁移旧 Node 数据文件失败: %s", child.name)
+                    }
+                }
+            }
+        }
+
+        private fun migrateLegacyProfile(bundleDirs: List<File>, targetProfile: File) {
+            if (targetProfile.isFile && targetProfile.length() > 0L) return
+            val chosen = bundleDirs
+                .map { File(it, "profile.json") }
+                .firstOrNull { it.isFile && it.length() > 0L }
+                ?: return
+            copyFileSafely(chosen, targetProfile, "profile.json")
+        }
+
+        private fun copyFileSafely(source: File, target: File, label: String) {
+            try {
+                val parent = target.parentFile
+                if (parent != null && !parent.exists() && !parent.mkdirs()) return
+                val temp = File(parent, "${target.name}.migrate-${UUID.randomUUID()}")
+                copyFile(source, temp)
+                if (!temp.renameTo(target)) {
+                    copyFile(temp, target)
+                    temp.delete()
+                }
+                Timber.i("已将旧 Node %s 迁移至全局共享目录: %s", label, target.absolutePath)
+            } catch (e: IOException) {
+                Timber.w(e, "迁移旧 Node %s 失败", label)
+            }
         }
 
         private fun pruneSourceRoot(sourceRoot: File) {
@@ -561,6 +659,7 @@ class NodeBundle internal constructor(
             sourceRoot: File,
             active: File,
             stored: NodeBundle?,
+            sharedData: File,
             session: LoadSession,
             onDownload: (() -> Unit)? = null,
         ): NodeBundle {
@@ -660,7 +759,7 @@ class NodeBundle internal constructor(
                     }
 
                     session.check()
-                    return NodeBundle(active, indexMd5, configMd5, pending = true, signingKey = signingKey)
+                    return NodeBundle(active, indexMd5, configMd5, pending = true, signingKey = signingKey, sharedDataDir = sharedData)
                 } finally {
                     Path.clear(staging)
                 }

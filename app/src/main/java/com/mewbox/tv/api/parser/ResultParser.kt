@@ -7,6 +7,8 @@ import com.mewbox.tv.bean.Result
 import com.mewbox.tv.bean.Site
 import com.mewbox.tv.bean.Vod
 import com.mewbox.tv.bean.VodClass
+import com.mewbox.tv.bean.VodFilter
+import com.mewbox.tv.bean.VodFilterValue
 import com.mewbox.tv.bean.WebOptions
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -35,8 +37,15 @@ object ResultParser {
         val (primaryUrl, playUrls) = parsePlayUrls(root["url"])
         val web = root["web"]?.let { WebOptions.fromJsonElement(it) }?.takeIf { it.isValid() }
         val msg = root["msg"].str()
+        val classes = root["class"].asArray().mapNotNull(::parseClass)
+        val mergedFilters = LinkedHashMap<String, List<VodFilter>>(parseFilters(root["filters"]))
+        classes.forEach { vodClass ->
+            if (vodClass.filters.isNotEmpty() && !mergedFilters.containsKey(vodClass.typeId)) {
+                mergedFilters[vodClass.typeId] = vodClass.filters
+            }
+        }
         return Result(
-            classes = root["class"].asArray().mapNotNull(::parseClass),
+            classes = classes,
             list = root["list"].asArray().mapNotNull(::parseVod),
             url = primaryUrl,
             playUrls = playUrls,
@@ -50,6 +59,7 @@ object ResultParser {
             total = root["total"].int(),
             msg = msg,
             web = web,
+            filters = mergedFilters,
         )
     }
 
@@ -101,7 +111,55 @@ object ResultParser {
         val o = e as? JsonObject ?: return null
         val id = o["type_id"].str()
         if (id.isEmpty()) return null
-        return VodClass(typeId = id, typeName = o["type_name"].str())
+        return VodClass(
+            typeId = id,
+            typeName = o["type_name"].str(),
+            filters = parseFilterList(o["filters"]),
+        )
+    }
+
+    /** 解析站点 filters 映射（兼容每项为数组或单个对象）。 */
+    private fun parseFilters(e: JsonElement?): Map<String, List<VodFilter>> {
+        val obj = e as? JsonObject ?: return emptyMap()
+        if (obj.isEmpty()) return emptyMap()
+        val map = LinkedHashMap<String, List<VodFilter>>(obj.size)
+        for ((typeId, valueEl) in obj) {
+            val list = parseFilterList(valueEl)
+            if (list.isNotEmpty()) {
+                map[typeId] = list
+            }
+        }
+        return map
+    }
+
+    private fun parseFilterList(e: JsonElement?): List<VodFilter> = when (e) {
+        is JsonArray -> e.mapNotNull(::parseFilter)
+        is JsonObject -> listOfNotNull(parseFilter(e))
+        else -> emptyList()
+    }
+
+    private fun parseFilter(e: JsonElement): VodFilter? {
+        val o = e as? JsonObject ?: return null
+        val key = o["key"].str()
+        if (key.isEmpty()) return null
+        val initEl = o["init"]
+        val init = if (initEl is JsonPrimitive && initEl !is JsonNull) initEl.content else null
+        val values = o["value"].asArray().mapNotNull(::parseFilterValue)
+        if (values.isEmpty()) return null
+        return VodFilter(
+            key = key,
+            name = o["name"].str(),
+            init = init,
+            values = values,
+        )
+    }
+
+    private fun parseFilterValue(e: JsonElement): VodFilterValue? {
+        val o = e as? JsonObject ?: return null
+        val n = o["n"].str()
+        val v = o["v"].str().trim()
+        if (n.isEmpty() && v.isEmpty()) return null
+        return VodFilterValue(n = n.ifEmpty { v }, v = v)
     }
 
     private fun parseVod(e: JsonElement): Vod? {

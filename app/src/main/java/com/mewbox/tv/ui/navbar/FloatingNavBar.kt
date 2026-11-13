@@ -19,6 +19,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -50,10 +52,12 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.fastCoerceIn
 import androidx.compose.ui.util.fastRoundToInt
 import androidx.compose.ui.util.lerp
@@ -73,6 +77,7 @@ import com.mewbox.tv.ui.theme.LiquidGlassConfig
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.math.min
 import kotlin.math.sign
 
 enum class NavAxis { Horizontal, Vertical }
@@ -333,7 +338,7 @@ fun FloatingNavBar(
                     onDrawSurface = { drawRect(containerColor) }
                 )
                 .then(interactiveHighlight?.modifier ?: Modifier)
-                .crossAxisSize(axis, 64.dp)
+                .crossAxisSize(axis, NavMetrics.BAR_CROSS_DP.dp)
                 .mainAxisStretch(axis)
                 .padding(4.dp),
             horizontalContent = {
@@ -401,7 +406,7 @@ fun FloatingNavBar(
                         onDrawSurface = { drawRect(containerColor) }
                     )
                     .then(interactiveHighlight?.modifier ?: Modifier)
-                    .crossAxisSize(axis, 56.dp)
+                    .crossAxisSize(axis, NavMetrics.SLOT_MAIN_DP.dp)
                     .mainAxisStretch(axis)
                     .mainAxisPadding(axis, 4.dp)
                     .graphicsLayer(colorFilter = ColorFilter.tint(accentColor)),
@@ -494,7 +499,7 @@ fun FloatingNavBar(
                             drawRect(Color.Black.copy(alpha = 0.03f * progress))
                         }
                     )
-                    .crossAxisSize(axis, 56.dp)
+                    .crossAxisSize(axis, NavMetrics.SLOT_MAIN_DP.dp)
                     .mainAxisLength(
                         axis,
                         with(density) { ((totalStridePx - 8f.dp.toPx()) / slotCount).toDp() }
@@ -603,7 +608,7 @@ private fun NavTabItem(
                 scaleX = currentScale
                 scaleY = currentScale
             },
-        verticalArrangement = Arrangement.spacedBy(1.dp, Alignment.CenterVertically),
+        verticalArrangement = Arrangement.spacedBy(2.dp, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         if (tab.iconRes != 0) {
@@ -624,11 +629,98 @@ private fun NavTabItem(
         if (selected) {
             Text(
                 text = tab.label,
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = 12.sp,
+                    lineHeight = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                ),
                 color = textColor,
-                maxLines = 1
+                maxLines = 1,
             )
         }
+    }
+}
+
+/**
+ * 底部导航栏右侧独立液态玻璃圆形搜索按钮（与 [FloatingNavBar] 保持同一玻璃材质与高度）
+ * 直径共用 [NavMetrics.BAR_CROSS_DP]，与 Tab 胶囊严格等高，不单独调节。
+ */
+@Composable
+fun FloatingNavSearchButton(
+    backdrop: Backdrop,
+    config: LiquidGlassConfig,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val isBlurEnabled = config.navbarEnabled
+    val containerColor = MaterialTheme.colorScheme.surfaceContainer.copy(
+        alpha = if (isBlurEnabled) 0.55f * config.containerAlphaScale else 1f
+    )
+    val animationScope = rememberCoroutineScope()
+    val interactiveHighlight =
+        if (isBlurEnabled) {
+            remember(animationScope) { InteractiveHighlight(animationScope) }
+        } else {
+            null
+        }
+
+    Box(
+        modifier = modifier
+            .size(NavMetrics.BAR_CROSS_DP.dp)
+            .drawBackdrop(
+                backdrop = backdrop,
+                shape = { ContinuousCapsule },
+                effects = {
+                    if (isBlurEnabled) {
+                        colorControls(
+                            brightness = config.contentBrightness,
+                            contrast = config.contentContrast,
+                            saturation = config.contentSaturation,
+                        )
+                        blur(config.blurDp.dp.toPx())
+                        val refraction = min(config.distortionDp.dp.toPx(), size.minDimension / 2f)
+                        lens(
+                            refraction,
+                            refraction,
+                            chromaticAberration = config.dispersion,
+                        )
+                    }
+                },
+                highlight = {
+                    Highlight.Default.copy(alpha = if (isBlurEnabled) 1f else 0f)
+                },
+                shadow = {
+                    Shadow.Default.copy(
+                        color = Color.Black.copy(0.1f)
+                    )
+                },
+                layerBlock = {
+                    if (isBlurEnabled && interactiveHighlight != null) {
+                        val progress = interactiveHighlight.pressProgress
+                        val scale = lerp(1f, 1f + 6f.dp.toPx() / size.minDimension, progress)
+                        scaleX = scale
+                        scaleY = scale
+                    }
+                },
+                onDrawSurface = { drawRect(containerColor) }
+            )
+            .clip(ContinuousCapsule)
+            .then(interactiveHighlight?.modifier ?: Modifier)
+            .then(interactiveHighlight?.gestureModifier ?: Modifier)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                role = Role.Button,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.Search,
+            contentDescription = "搜索",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(30.dp),
+        )
     }
 }
 

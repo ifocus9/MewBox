@@ -15,6 +15,7 @@ import com.mewbox.tv.db.SiteDao
 import com.mewbox.tv.db.TrackDao
 import com.mewbox.tv.ui.web.WebActivity
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -64,7 +65,7 @@ class SiteRepository @Inject constructor(
 
     /** 监听当前默认首页站点 */
     fun observeHomeSite(): Flow<Site?> =
-        siteDao.observeAll().map { sites ->
+        vodConfig.observeSites().map { sites ->
             sites.firstOrNull { it.isHome && it.enabled && !it.hide && router.isSupported(it) }
                 ?: sites.firstOrNull { it.enabled && !it.hide && router.isSupported(it) }
         }.distinctUntilChanged()
@@ -116,9 +117,19 @@ class SiteRepository @Inject constructor(
         }
     }
 
-    suspend fun getCategoryContent(site: Site, tid: String, pg: Int): Result = withContext(Dispatchers.IO) {
+    suspend fun getCategoryContent(
+        site: Site,
+        tid: String,
+        pg: Int,
+        extend: Map<String, String> = emptyMap(),
+    ): Result = withContext(Dispatchers.IO) {
         try {
-            router.spider(site).categoryContent(tid = tid, pg = pg.toString())
+            router.spider(site).categoryContent(
+                tid = tid,
+                pg = pg.toString(),
+                filter = true,
+                extend = extend,
+            )
         } catch (e: Exception) {
             Timber.e(e, "获取分类失败: ${site.name}, tid=$tid, pg=$pg")
             Result()
@@ -170,6 +181,7 @@ class SiteRepository @Inject constructor(
             try {
                 return@withContext router.spider(site).playerContent(flag = flag, id = playUrl)
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
                 lastError = e
                 Timber.w(e, "解析播放地址异常 (尝试 $attempt/$maxAttempts): site=${site.name}, flag=$flag, url=$playUrl")
                 if (attempt < maxAttempts) {

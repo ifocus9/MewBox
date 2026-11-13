@@ -17,14 +17,17 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import android.content.Context
 import android.net.Uri
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -57,6 +60,80 @@ class VodConfig @Inject constructor(
     /** 普通/HTML 订阅源导入与探测期间的全局加载文案 */
     val importingText: StateFlow<String?> = _importingText.asStateFlow()
 
+    private val configStateLock = Any()
+    private var activeConfigOps = 0
+    private val _isConfiguring = MutableStateFlow(false)
+    /** 是否正在执行订阅加载/切换/站点表替换；期间应暂缓首页等自动加载，避免与中途状态竞态 */
+    val isConfiguring: StateFlow<Boolean> = _isConfiguring.asStateFlow()
+
+    private val sitesFlow: SharedFlow<List<Site>> =
+        siteDao.observeAll().shareIn(backgroundScope, SharingStarted.WhileSubscribed(), replay = 1)
+
+    /** 共享站点列表观察流，确保配置替换与 UI 首页监听看到一致的 Room 更新 */
+    fun observeSites(): Flow<List<Site>> = sitesFlow
+
+    private fun beginConfiguring() {
+        synchronized(configStateLock) {
+            activeConfigOps++
+            if (activeConfigOps == 1) {
+                _isConfiguring.value = true
+            }
+        }
+    }
+
+    private fun endConfiguring() {
+        synchronized(configStateLock) {
+            if (activeConfigOps > 0) {
+                activeConfigOps--
+            }
+            if (activeConfigOps == 0) {
+                _isConfiguring.value = false
+            }
+        }
+    }
+
+    private suspend fun <T> withConfiguring(block: suspend () -> T): T {
+        beginConfiguring()
+        return try {
+            block()
+        } finally {
+            endConfiguring()
+        }
+    }
+
+    private data class SiteSyncKey(
+        val key: String,
+        val name: String,
+        val type: Int,
+        val api: String,
+        val ext: String,
+        val enabled: Boolean,
+        val hide: Boolean,
+        val isHome: Boolean,
+    )
+
+    private fun List<Site>.toSyncKeyMap(): Map<String, SiteSyncKey> =
+        associate { site ->
+            site.key to SiteSyncKey(
+                key = site.key,
+                name = site.name,
+                type = site.type,
+                api = site.api,
+                ext = site.ext,
+                enabled = site.enabled,
+                hide = site.hide,
+                isHome = site.isHome,
+            )
+        }
+
+    /** 等待 Room 共享站点流同步到刚写入的最终站点快照，避免首页先用旧站点发请求 */
+    private suspend fun awaitSitesSettled(finalSites: List<Site>) {
+        val expected = finalSites.toSyncKeyMap()
+        withTimeoutOrNull(300L) {
+            sitesFlow.first { current -> current.toSyncKeyMap() == expected }
+        }
+    }
+
     /** 观察当前激活的订阅记录 */
     fun observeActiveConfig(): Flow<Config?> =
         combine(configDao.observeAll(), settings.configUrlFlow) { configs, activeUrl ->
@@ -73,6 +150,17 @@ class VodConfig @Inject constructor(
     ): Int {
         val text = input.trim()
         require(text.isNotEmpty()) { "请输入订阅地址或 JSON" }
+        return withConfiguring {
+            importInternal(text, name, configId, replaceUrl)
+        }
+    }
+
+    private suspend fun importInternal(
+        text: String,
+        name: String,
+        configId: String,
+        replaceUrl: String,
+    ): Int {
         val isJson = text.startsWith("{")
         val isNode = !isJson && nodeRuntime.isConfig(text)
         val isLocal = !isJson && !isNode && isLocalFile(text)
@@ -212,6 +300,9 @@ class VodConfig @Inject constructor(
                 }
             }
 
+            // 等待 Room 共享站点流对齐新写入快照，避免配置标志释放后首页仍用旧站点发请求
+            awaitSitesSettled(finalSites)
+
             // 发送配置刷新事件，触发首页等页面刷新
             _configReloadFlow.tryEmit(System.currentTimeMillis())
             return finalSites.size
@@ -223,14 +314,14 @@ class VodConfig @Inject constructor(
     }
 
     /** 重新拉取并刷新当前激活的订阅配置。返回导入/刷新的站点数。 */
-    suspend fun reload(): Int {
+    suspend fun reload(): Int = withConfiguring {
         val currentUrl = settings.configUrlFlow.first().ifBlank {
             configDao.latest()?.url.orEmpty()
         }
         require(currentUrl.isNotBlank()) { "未配置订阅地址，请先在设置中添加订阅" }
         val config = configDao.find(currentUrl)
         val name = config?.name.orEmpty()
-        return import(currentUrl, name)
+        importInternal(currentUrl, name, "", "")
     }
 
     /**
@@ -253,46 +344,55 @@ class VodConfig @Inject constructor(
      * @return 需要在首页提示的文案（无提示时返回 null）
      */
     suspend fun ensureActiveConfig(): String? {
-        val currentUrl = settings.configUrlFlow.first().ifBlank {
-            configDao.latest()?.url.orEmpty()
-        }
-        if (currentUrl.isBlank()) {
-            nodeRuntime.clearLoadingForce()
-            return null
-        }
+        var runHtmlPushSetup = false
+        try {
+            return withConfiguring {
+                val currentUrl = settings.configUrlFlow.first().ifBlank {
+                    configDao.latest()?.url.orEmpty()
+                }
+                if (currentUrl.isBlank()) {
+                    nodeRuntime.clearLoadingForce()
+                    return@withConfiguring null
+                }
 
-        val currentConfig = configDao.find(currentUrl)
-        if (currentConfig != null && currentConfig.id.isNotBlank() && settings.currentConfigId != currentConfig.id) {
-            settings.setConfigId(currentConfig.id)
-        }
-        if (currentConfig?.isHtml == true) {
-            nodeRuntime.clearLoadingForce()
-            ensurePushBackendReady()
-            return null
-        }
+                val currentConfig = configDao.find(currentUrl)
+                if (currentConfig != null && currentConfig.id.isNotBlank() && settings.currentConfigId != currentConfig.id) {
+                    settings.setConfigId(currentConfig.id)
+                }
+                if (currentConfig?.isHtml == true) {
+                    nodeRuntime.clearLoadingForce()
+                    runHtmlPushSetup = true
+                    return@withConfiguring null
+                }
 
-        val nodeSource = nodeRuntime.isConfig(currentUrl)
-        val cacheReady = siteDao.getAll().isNotEmpty()
-        if (cacheReady && !nodeSource) return null
+                val nodeSource = nodeRuntime.isConfig(currentUrl)
+                val cacheReady = siteDao.getAll().isNotEmpty()
+                if (cacheReady && !nodeSource) return@withConfiguring null
 
-        return try {
-            reload()
-            if (nodeSource) "Node.js 服务启动成功" else null
-        } catch (e: Exception) {
-            Timber.w(e, "启动时加载订阅配置失败: %s", currentUrl)
-            // 无缓存可退：启动就是彻底失败了，必须给用户一句反馈，否则首页只会是个空壳
-            if (!nodeSource || !cacheReady) {
-                nodeRuntime.clearLoadingForce()
-                return if (nodeSource) "启动失败：${NodeRuntime.describe(e)}" else null
+                try {
+                    reload()
+                    if (nodeSource) "Node.js 服务启动成功" else null
+                } catch (e: Exception) {
+                    Timber.w(e, "启动时加载订阅配置失败: %s", currentUrl)
+                    // 无缓存可退：启动就是彻底失败了，必须给用户一句反馈，否则首页只会是个空壳
+                    if (!nodeSource || !cacheReady) {
+                        nodeRuntime.clearLoadingForce()
+                        return@withConfiguring if (nodeSource) "启动失败：${NodeRuntime.describe(e)}" else null
+                    }
+                    // 有缓存就降级：用本地包把运行时装起来，别让首页白屏
+                    try {
+                        nodeRuntime.ensureStarted(currentUrl, notify = false)
+                        "订阅刷新失败，已使用本地缓存"
+                    } catch (e2: Exception) {
+                        Timber.w(e2, "启动时降级拉起 Node.js 运行时失败: %s", currentUrl)
+                        nodeRuntime.clearLoadingForce()
+                        "启动失败：${NodeRuntime.describe(e2)}"
+                    }
+                }
             }
-            // 有缓存就降级：用本地包把运行时装起来，别让首页白屏
-            try {
-                nodeRuntime.ensureStarted(currentUrl, notify = false)
-                "订阅刷新失败，已使用本地缓存"
-            } catch (e2: Exception) {
-                Timber.w(e2, "启动时降级拉起 Node.js 运行时失败: %s", currentUrl)
-                nodeRuntime.clearLoadingForce()
-                "启动失败：${NodeRuntime.describe(e2)}"
+        } finally {
+            if (runHtmlPushSetup) {
+                ensurePushBackendReady()
             }
         }
     }

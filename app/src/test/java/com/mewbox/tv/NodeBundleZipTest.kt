@@ -157,4 +157,62 @@ class NodeBundleZipTest {
 
         server.shutdown()
     }
+
+    @Test
+    fun prepare_differentSources_shareGlobalDataAndSurvivePrune() {
+        val zip1 = tmp.newFile("bundle_source_1.zip")
+        val zip2 = tmp.newFile("bundle_source_2.zip")
+        createZip(zip1, mapOf("index.js" to "// v1", "index.config.js" to "// c1"))
+        createZip(zip2, mapOf("index.js" to "// v2", "index.config.js" to "// c2"))
+
+        val bundle1 = NodeBundle.prepare(context, zip1.absolutePath)
+        bundle1.accept()
+        val db1 = File(bundle1.data, "db.json")
+        db1.writeText("""{"baidu":{"cookie":"BDUSS=secret"}}""", Charsets.UTF_8)
+
+        val bundle2 = NodeBundle.prepare(context, zip2.absolutePath)
+        bundle2.accept()
+        assertEquals(bundle1.data.canonicalFile, bundle2.data.canonicalFile)
+        assertEquals(File(mockFilesDir, "nodejs/data").canonicalFile, bundle2.data.canonicalFile)
+        assertEquals("""{"baidu":{"cookie":"BDUSS=secret"}}""", File(bundle2.data, "db.json").readText(Charsets.UTF_8))
+
+        // 清理旧源缓存时必须只删 bundles/<sha256>，不能影响全局共享的 data/db.json
+        NodeBundle.prune(context, listOf(zip2.absolutePath), zip2.absolutePath)
+        assertFalse(bundle1.root.parentFile?.exists() == true)
+        assertTrue(File(bundle2.data, "db.json").isFile)
+    }
+
+    @Test
+    fun restoreLatest_migratesLegacyDbPreferringCookieConfig() {
+        val legacyCookieSourceDir = File(mockFilesDir, "nodejs/bundles/${Crypto.sha256("http://old.example/index.js.md5")}")
+        val legacyCookieActive = File(legacyCookieSourceDir, "active").apply { mkdirs() }
+        File(legacyCookieActive, "index.js").writeText("// old")
+        File(legacyCookieActive, "index.config.js").writeText("// old cfg")
+        val legacyCookieData = File(legacyCookieSourceDir, "data").apply { mkdirs() }
+        val legacyCookieDb = File(legacyCookieData, "db.json").apply {
+            writeText("""{"quark":{"cookie":"__pus=abc"},"baidu":{"cookie":"BDUSS=xyz"}}""", Charsets.UTF_8)
+            setLastModified(1000L)
+        }
+        File(legacyCookieSourceDir, "profile.json").writeText("""{"user":"demo"}""", Charsets.UTF_8)
+
+        val legacyEmptySourceDir = File(mockFilesDir, "nodejs/bundles/${Crypto.sha256("http://new.example/dist.zip")}")
+        val legacyEmptyActive = File(legacyEmptySourceDir, "active").apply { mkdirs() }
+        File(legacyEmptyActive, "index.js").writeText("// new")
+        File(legacyEmptyActive, "index.config.js").writeText("// new cfg")
+        val legacyEmptyData = File(legacyEmptySourceDir, "data").apply { mkdirs() }
+        File(legacyEmptyData, "db.json").apply {
+            writeText("""{"quark":{}}""", Charsets.UTF_8)
+            setLastModified(5000L)
+        }
+        legacyEmptySourceDir.setLastModified(5000L)
+
+        val restored = requireNotNull(NodeBundle.restoreLatest(context))
+        val sharedDb = File(mockFilesDir, "nodejs/data/db.json")
+        val sharedProfile = File(mockFilesDir, "nodejs/profile.json")
+        assertTrue(sharedDb.isFile)
+        assertTrue(sharedProfile.isFile)
+        assertEquals(legacyCookieDb.readText(Charsets.UTF_8), sharedDb.readText(Charsets.UTF_8))
+        assertEquals("""{"user":"demo"}""", sharedProfile.readText(Charsets.UTF_8))
+        assertEquals(File(mockFilesDir, "nodejs/data").canonicalFile, restored.data.canonicalFile)
+    }
 }

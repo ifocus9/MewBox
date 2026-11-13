@@ -25,7 +25,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -42,18 +42,19 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mewbox.tv.bean.VodClass
 import com.mewbox.tv.ui.theme.BlueTypeIndicator
-import androidx.compose.material.icons.rounded.Tune
 
 /**
- * 首页分类横向导航条（分类项文字居中对齐指示条 + 弹性展开动效 + 点击当前分类平滑回顶 + 右侧全部分类菜单按钮）
+ * 首页分类横向导航条（分类项文字居中对齐指示条 + 弹性展开动效 + 点击当前分类平滑回顶 + 右侧筛选按钮）
  */
 @Composable
 fun HomeTabBar(
     classes: List<VodClass>,
     selectedClassId: String,
     tabListState: LazyListState,
+    showFilterButton: Boolean,
+    hasActiveFilters: Boolean,
     onClassClick: (classId: String, isAlreadySelected: Boolean) -> Unit,
-    onTypeMoreClick: () -> Unit,
+    onFilterClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -149,21 +150,23 @@ fun HomeTabBar(
             }
         }
 
-        // 右侧全部分类按钮（三横线菜单图标）
-        Box(
-            modifier = Modifier
-                .padding(start = 4.dp, end = 10.dp, bottom = 7.dp)
-                .size(28.dp)
-                .clip(RoundedCornerShape(6.dp))
-                .clickable { onTypeMoreClick() },
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.Tune,
-                contentDescription = "全部分类",
-                tint = Color(0xFF666666),
-                modifier = Modifier.size(20.dp),
-            )
+        // 右侧筛选按钮（当前分类存在筛选项时才展示）
+        if (showFilterButton) {
+            Box(
+                modifier = Modifier
+                    .padding(start = 4.dp, end = 10.dp, bottom = 7.dp)
+                    .size(28.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable { onFilterClick() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Tune,
+                    contentDescription = "筛选",
+                    tint = if (hasActiveFilters) BlueTypeIndicator else Color(0xFF666666),
+                    modifier = Modifier.size(20.dp),
+                )
+            }
         }
     }
 }

@@ -613,7 +613,7 @@ private fun PlayerQuickActionButton(
                 onClick = onClick,
                 onLongClick = onLongClick,
             )
-            .padding(horizontal = 6.dp, vertical = 2.dp),
+            .padding(horizontal = 6.dp, vertical = 4.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(

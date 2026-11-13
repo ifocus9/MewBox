@@ -1,9 +1,24 @@
 package com.mewbox.tv.bean
 
+/** 分类筛选项单个可选值。 */
+data class VodFilterValue(
+    val n: String,
+    val v: String,
+)
+
+/** 分类单个筛选维度（如地区、年份、排序）。 */
+data class VodFilter(
+    val key: String,
+    val name: String,
+    val init: String? = null,
+    val values: List<VodFilterValue> = emptyList(),
+)
+
 /** 分类（plan 中的 Class，为避开 java.lang.Class 重命名）。 */
 data class VodClass(
     val typeId: String,
     val typeName: String,
+    val filters: List<VodFilter> = emptyList(),
 )
 
 data class Episode(
@@ -83,6 +98,7 @@ data class Result(
     val total: Int = 0,
     val msg: String = "",
     val web: WebOptions? = null,
+    val filters: Map<String, List<VodFilter>> = emptyMap(),
 ) {
     val needSniff: Boolean get() = parse == 1 || jx == 1
 }

@@ -80,7 +80,8 @@ class NodeRuntime @Inject constructor(
     ): Boolean = withContext(Dispatchers.IO) {
         // 已经在跑（例如进程存活时重复进入 App）无需再打扰用户
         if (client.isRunning()) return@withContext true
-        val id = sequence.incrementAndGet()
+        // 静默预热等不展示 loading 的调用不能递增批次号，避免打断并发前台加载任务的收尾清理
+        val id = if (showLoading) sequence.incrementAndGet() else 0
         // 有缓存也要先给出 loading，避免“没反应”的错觉
         if (showLoading) {
             setLoading(id, initialText(source))

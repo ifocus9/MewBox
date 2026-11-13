@@ -6,6 +6,7 @@ object NavMetrics {
 
     const val MARGIN_DP = 12
 
+    /** Tab 胶囊与右侧搜索圆按钮的共同高度/直径：两者始终等高，不提供单独调节 */
     const val BAR_CROSS_DP = 64
 
     const val SLOT_MAIN_DP = 56

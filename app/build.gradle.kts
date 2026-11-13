@@ -12,8 +12,8 @@ plugins {
 // ==========================================
 // 个人自用极简版本控制
 // ==========================================
-val appVersionCode = 4
-val appVersionName = "1.0.3"
+val appVersionCode = 5
+val appVersionName = "1.1.0"
 
 // 构建时间戳（例如 202611041147）
 val buildTimestamp = LocalDateTime.now()
@@ -40,8 +40,9 @@ android {
 
     packaging {
         jniLibs {
-            // 启用 so 压缩打包：libnode 等 so 库以 Deflate 压缩存放于 APK 中
-            // 可大幅降低 APK 下载与分发体积（由 ~55MB 降至 ~24MB）
+            // so 以 STORED（不压缩、页对齐）存放于 APK：系统直接从 APK mmap 加载，
+            // 安装时不再解压到 /data/app/.../lib，避免设备上存两份 so（libnode 近 50MB），
+            // 同时打包与 adb install 也更快。代价是 APK 文件本身更大，个人自用可接受。
             useLegacyPackaging = false
         }
         resources {
@@ -49,6 +50,8 @@ android {
                 "META-INF/*.version",
                 "META-INF/LICENSE*",
                 "META-INF/NOTICE*",
+                "META-INF/**/LICENSE*",
+                "META-INF/**/NOTICE*",
                 "META-INF/AL2.0",
                 "META-INF/LGPL2.1",
                 "DebugProbesKt.bin"
@@ -161,7 +164,6 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
 
-    implementation(libs.retrofit)
     implementation(libs.okhttp)
 
     implementation(libs.media3.exoplayer)

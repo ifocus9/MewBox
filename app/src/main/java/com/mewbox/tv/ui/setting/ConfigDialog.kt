@@ -145,21 +145,9 @@ fun ConfigDialog(
                         value = name,
                         onValueChange = { name = it },
                         modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("订阅名称（留空则用链接）", color = Color(0xFF8A8F98), fontSize = 13.sp) },
+                        placeholder = { Text("订阅名称", color = Color(0xFF8A8F98), fontSize = 13.sp) },
                         singleLine = true,
                         shape = RoundedCornerShape(10.dp),
-                        trailingIcon = {
-                            if (name.isNotEmpty()) {
-                                IconButton(onClick = { name = "" }) {
-                                    Icon(
-                                        imageVector = Icons.Default.Clear,
-                                        contentDescription = "清除名称",
-                                        tint = Color(0xFF8E8E93),
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                }
-                            }
-                        },
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = BluePrimary,
                             unfocusedBorderColor = Color(0xFFDADCE0),
@@ -177,34 +165,19 @@ fun ConfigDialog(
                     onValueChange = { url = it },
                     modifier = Modifier.fillMaxWidth(),
                     placeholder = { Text("请输入配置地址", color = Color(0xFF8A8F98), fontSize = 14.sp) },
-                    maxLines = 3,
+                    singleLine = true,
                     shape = RoundedCornerShape(10.dp),
                     trailingIcon = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (url.isNotEmpty()) {
-                                IconButton(
-                                    onClick = { url = "" },
-                                    modifier = Modifier.size(32.dp),
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Clear,
-                                        contentDescription = "清除地址",
-                                        tint = Color(0xFF8E8E93),
-                                        modifier = Modifier.size(16.dp),
-                                    )
-                                }
-                            }
-                            IconButton(
-                                onClick = onPickFileClick,
-                                modifier = Modifier.size(32.dp),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.FolderOpen,
-                                    contentDescription = "选择本地文件",
-                                    tint = Color(0xFF8E8E93),
-                                    modifier = Modifier.size(24.dp),
-                                )
-                            }
+                        IconButton(
+                            onClick = onPickFileClick,
+                            modifier = Modifier.size(32.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.FolderOpen,
+                                contentDescription = "选择本地文件",
+                                tint = Color(0xFF8E8E93),
+                                modifier = Modifier.size(24.dp),
+                            )
                         }
                     },
                     colors = OutlinedTextFieldDefaults.colors(

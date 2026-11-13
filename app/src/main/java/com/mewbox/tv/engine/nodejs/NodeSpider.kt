@@ -18,6 +18,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import timber.log.Timber
 
 /**
  * Node.js 爬虫实现（对齐 FongMi 架构与协议）
@@ -120,15 +121,17 @@ class NodeSpider(
         extend: Map<String, String>,
     ): Result = runNodeIo {
         ensureInit()
+        val filterObj = buildJsonObject {
+            for ((k, v) in extend) {
+                put(k, v)
+            }
+        }
         val body = buildJsonObject {
             put("id", tid)
             put("page", pg)
             put("filter", filter)
-            put("filters", buildJsonObject {
-                for ((k, v) in extend) {
-                    put(k, v)
-                }
-            })
+            put("filters", filterObj)
+            put("extend", filterObj)
         }
         val raw = addLegacyConfigActions(call("/category", body))
         tagResult(ResultParser.parseResult(raw))
@@ -166,7 +169,15 @@ class NodeSpider(
                 }
             })
         }
-        val raw = call("/play", body)
+        val raw = try {
+            call("/play", body)
+        } catch (e: NodeClient.NodeHttpException) {
+            if (e.serverMessage.isNotBlank()) {
+                Timber.w(e, "Node /play 返回错误提示: site=%s, flag=%s, msg=%s", site.name, flag, e.serverMessage)
+                return@runNodeIo Result(msg = e.serverMessage)
+            }
+            throw e
+        }
         tagResult(ResultParser.parseResult(raw))
     }
 

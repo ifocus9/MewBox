@@ -85,6 +85,7 @@ class NodeClient(
         private val PLAY_TIMEOUT_MILLIS = TimeUnit.SECONDS.toMillis(60)
         private const val MAX_CONFIG_RESPONSE_BYTES = 4L * 1024 * 1024
         private const val MAX_JSON_RESPONSE_BYTES = 16L * 1024 * 1024
+        private const val MAX_ERROR_RESPONSE_BYTES = 64L * 1024
         private val LEGACY_LOOPBACK = Pattern.compile("http://(?:127\\.0\\.0\\.1|localhost):(?:9978|9988)(?=[/?#|$\\s\"']|$)")
         private val JSON = "application/json; charset=utf-8".toMediaType()
 
@@ -155,6 +156,20 @@ class NodeClient(
                     }
                     return output.toString(StandardCharsets.UTF_8.name())
                 }
+            }
+        }
+
+        internal fun extractErrorMessage(raw: String): String {
+            val trimmed = raw.trim()
+            if (trimmed.isEmpty()) return ""
+            return try {
+                val obj = Json.parseToJsonElement(trimmed) as? JsonObject ?: return ""
+                val candidates = listOf(obj["message"], obj["msg"], obj["error"])
+                candidates.firstNotNullOfOrNull { element ->
+                    (element as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim()?.takeIf { it.isNotEmpty() }
+                }.orEmpty()
+            } catch (_: Exception) {
+                ""
             }
         }
     }
@@ -491,7 +506,8 @@ class NodeClient(
 
     fun getProfileFile(): File? {
         val current = bundle ?: return null
-        return File(current.root.parentFile, "profile.json")
+        val parent = current.data.parentFile ?: current.root.parentFile
+        return File(parent, "profile.json")
     }
 
     private fun readProfile(): JsonElement {
@@ -604,7 +620,14 @@ class NodeClient(
     @Throws(IOException::class)
     private fun readResponse(response: Response, state: RequestState, limit: Long): String {
         val body = response.body
-        if (!response.isSuccessful) throw NodeHttpException(response.code)
+        if (!response.isSuccessful) {
+            val serverMessage = try {
+                extractErrorMessage(readResponse(body, MAX_ERROR_RESPONSE_BYTES))
+            } catch (_: Exception) {
+                ""
+            }
+            throw NodeHttpException(response.code, serverMessage)
+        }
         val result = rewriteLoopback(readResponse(body, limit), state.address)
             ?: throw IOException("Empty rewritten response")
         checkCurrent(state)
@@ -853,7 +876,10 @@ class NodeClient(
         }
     }
 
-    class NodeHttpException(val code: Int) : IOException("Node HTTP $code")
+    class NodeHttpException(
+        val code: Int,
+        val serverMessage: String = "",
+    ) : IOException(if (serverMessage.isNotBlank()) "Node HTTP $code: $serverMessage" else "Node HTTP $code")
 
     class NodeResponseException(message: String) : IOException(message)
 }

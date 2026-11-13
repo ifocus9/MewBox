@@ -45,9 +45,11 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.VideoLibrary
 import androidx.compose.material3.ContainedLoadingIndicator
@@ -101,6 +103,7 @@ import com.mewbox.tv.ui.detail.DirectPlayScreen
 import com.mewbox.tv.ui.history.HistoryScreen
 import com.mewbox.tv.ui.home.HomeScreen
 import com.mewbox.tv.ui.navbar.FloatingNavBar
+import com.mewbox.tv.ui.navbar.FloatingNavSearchButton
 import com.mewbox.tv.ui.navbar.GlassTabItem
 import com.mewbox.tv.ui.navbar.NavAxis
 import com.mewbox.tv.ui.navbar.NavMetrics
@@ -585,6 +588,7 @@ private fun MainTabScreen(
                 tabs = Tab.entries,
                 selectedTabIndex = pagerState.targetPage,
                 onSelectTab = selectTab,
+                onSearchClick = { onNavigateToSearch("") },
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
         }
@@ -602,21 +606,25 @@ private fun AdaptiveFloatingNavBar(
     tabs: List<Tab>,
     selectedTabIndex: Int,
     onSelectTab: (Int) -> Unit,
+    onSearchClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (liquidGlassEnabled && liquidBackdrop != null) {
         val glassTabs = remember(tabs) {
             tabs.map { tab -> GlassTabItem(icon = tab.icon, label = tab.label) }
         }
-        Box(
+        Row(
             modifier = modifier
-                .widthIn(max = 320.dp)
+                .widthIn(max = 348.dp)
                 .fillMaxWidth()
                 .windowInsetsPadding(WindowInsets.navigationBars)
                 .padding(horizontal = 16.dp)
                 .padding(bottom = NavMetrics.MARGIN_DP.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             FloatingNavBar(
+                modifier = Modifier.weight(1f),
                 backdrop = liquidBackdrop,
                 axis = NavAxis.Horizontal,
                 selectedTabIndex = { selectedTabIndex },
@@ -625,16 +633,31 @@ private fun AdaptiveFloatingNavBar(
                 config = LiquidGlassDefaults.Config,
                 interactive = { true },
             )
+            FloatingNavSearchButton(
+                backdrop = liquidBackdrop,
+                config = LiquidGlassDefaults.Config,
+                onClick = onSearchClick,
+            )
         }
     } else {
-        Box(
+        Row(
             modifier = modifier
-                .windowInsetsPadding(WindowInsets.navigationBars),
+                .widthIn(max = 348.dp)
+                .fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.navigationBars)
+                .padding(horizontal = 16.dp)
+                .padding(bottom = NavMetrics.MARGIN_DP.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             MewFloatingBottomBar(
                 tabs = tabs,
                 selectedTabIndex = selectedTabIndex,
                 onSelectTab = onSelectTab,
+                modifier = Modifier.weight(1f),
+            )
+            MewFloatingSearchButton(
+                onClick = onSearchClick,
             )
         }
     }
@@ -653,7 +676,7 @@ private fun MewFloatingBottomBar(
     onSelectTab: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val shape = RoundedCornerShape(28.dp)
+    val shape = CircleShape
     Surface(
         shape = shape,
         color = Color.White.copy(alpha = 0.85f),
@@ -668,9 +691,7 @@ private fun MewFloatingBottomBar(
             ),
         ),
         modifier = modifier
-            .padding(horizontal = 24.dp, vertical = 18.dp)
-            .height(56.dp)
-            .widthIn(max = 280.dp),
+            .height(NavMetrics.BAR_CROSS_DP.dp),
     ) {
         Box(
             modifier = Modifier
@@ -700,12 +721,12 @@ private fun MewFloatingBottomBar(
                         .width(tabWidth)
                         .fillMaxHeight()
                         .padding(2.dp)
-                        .clip(RoundedCornerShape(22.dp))
+                        .clip(CircleShape)
                         .background(Color(0x14000000))
                         .border(
                             width = 0.5.dp,
                             color = Color.White.copy(alpha = 0.6f),
-                            shape = RoundedCornerShape(22.dp),
+                            shape = CircleShape,
                         ),
                 )
 
@@ -720,7 +741,7 @@ private fun MewFloatingBottomBar(
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxHeight()
-                                .clip(RoundedCornerShape(22.dp))
+                                .clip(CircleShape)
                                 .clickable(
                                     interactionSource = remember { MutableInteractionSource() },
                                     indication = null,
@@ -729,7 +750,7 @@ private fun MewFloatingBottomBar(
                         ) {
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center,
+                                verticalArrangement = Arrangement.spacedBy(2.dp, Alignment.CenterVertically),
                             ) {
                                 Icon(
                                     imageVector = tab.icon,
@@ -737,28 +758,74 @@ private fun MewFloatingBottomBar(
                                     tint = if (isSelected) {
                                         MaterialTheme.colorScheme.primary
                                     } else {
-                                        Color(0xFF1A1A1A)
+                                        Color(0xFF2C2C2E)
                                     },
                                     modifier = Modifier.size(24.dp),
                                 )
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Text(
-                                    text = tab.label,
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontSize = 11.sp,
-                                        fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
-                                    ),
-                                    color = if (isSelected) {
-                                        MaterialTheme.colorScheme.primary
-                                    } else {
-                                        Color(0xFF1A1A1A)
-                                    },
-                                )
+                                if (isSelected) {
+                                    Text(
+                                        text = tab.label,
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontSize = 12.sp,
+                                            lineHeight = 14.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                        ),
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
+                                }
                             }
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun MewFloatingSearchButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        shape = CircleShape,
+        color = Color.White.copy(alpha = 0.85f),
+        shadowElevation = 8.dp,
+        border = BorderStroke(
+            0.75.dp,
+            Brush.verticalGradient(
+                listOf(
+                    Color.White.copy(alpha = 0.85f),
+                    Color.White.copy(alpha = 0.2f),
+                ),
+            ),
+        ),
+        modifier = modifier
+            .size(NavMetrics.BAR_CROSS_DP.dp)
+            .clip(CircleShape)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            ),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        0f to Color.White.copy(alpha = 0.4f),
+                        0.5f to Color.Transparent,
+                    ),
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Search,
+                contentDescription = "搜索",
+                tint = Color(0xFF2C2C2E),
+                modifier = Modifier.size(30.dp),
+            )
         }
     }
 }

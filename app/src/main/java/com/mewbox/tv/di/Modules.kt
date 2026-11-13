@@ -6,7 +6,6 @@ import com.mewbox.tv.api.douban.DoubanApi
 import com.mewbox.tv.api.net.HostInterceptor
 import com.mewbox.tv.api.net.HostMapping
 import com.mewbox.tv.api.net.SSLCompat
-import com.mewbox.tv.api.net.T4Service
 import com.mewbox.tv.catvod.SpiderLoader
 import com.mewbox.tv.db.AppDatabase
 import com.mewbox.tv.db.ConfigDao
@@ -23,7 +22,6 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import dagger.multibindings.IntoSet
 import okhttp3.OkHttpClient
-import retrofit2.Retrofit
 import java.util.concurrent.TimeUnit
 import javax.inject.Named
 import javax.inject.Singleton
@@ -83,13 +81,6 @@ object NetworkModule {
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(20, TimeUnit.SECONDS)
             .build()
-
-    @Provides @Singleton
-    fun retrofit(@Named("api") client: OkHttpClient): Retrofit =
-        Retrofit.Builder().baseUrl("http://localhost/").client(client).build()
-
-    @Provides @Singleton
-    fun t4Service(retrofit: Retrofit): T4Service = retrofit.create(T4Service::class.java)
 }
 
 @Module

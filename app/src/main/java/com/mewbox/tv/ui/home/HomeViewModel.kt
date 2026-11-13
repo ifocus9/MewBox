@@ -5,9 +5,12 @@ import androidx.lifecycle.viewModelScope
 import com.mewbox.tv.api.config.SettingsRepository
 import com.mewbox.tv.api.config.VodConfig
 import com.mewbox.tv.bean.Config
+import com.mewbox.tv.bean.Result
 import com.mewbox.tv.bean.Site
 import com.mewbox.tv.bean.Vod
 import com.mewbox.tv.bean.VodClass
+import com.mewbox.tv.bean.VodFilter
+import com.mewbox.tv.bean.VodFilterValue
 import com.mewbox.tv.catvod.SpiderRouter
 import com.mewbox.tv.db.ConfigDao
 import com.mewbox.tv.db.SiteDao
@@ -35,6 +38,10 @@ data class HomeUiState(
     val sitesLoaded: Boolean = false,
     val classes: List<VodClass> = emptyList(),
     val selectedClassId: String = "",
+    /** 各分类可用的筛选维度（key = typeId） */
+    val filtersByClass: Map<String, List<VodFilter>> = emptyMap(),
+    /** 各分类当前选中的筛选参数（key = typeId, value = filterKey -> filterValue） */
+    val selectedFiltersByClass: Map<String, Map<String, String>> = emptyMap(),
     val items: List<Vod> = emptyList(),
     val isLoading: Boolean = false,
     val isLoadingMore: Boolean = false,
@@ -50,7 +57,28 @@ data class HomeUiState(
     val pageCount: Int = 1,
     val error: String? = null,
     val message: String? = null,
-)
+) {
+    val currentFilters: List<VodFilter>
+        get() = filtersByClass[selectedClassId].orEmpty()
+
+    val currentSelectedFilters: Map<String, String>
+        get() = selectedFiltersByClass[selectedClassId].orEmpty()
+
+    val currentDefaultFilters: Map<String, String>
+        get() = buildDefaultFiltersForClass(currentFilters)
+}
+
+private fun buildDefaultFiltersForClass(filters: List<VodFilter>): Map<String, String> {
+    if (filters.isEmpty()) return emptyMap()
+    val defaults = LinkedHashMap<String, String>()
+    for (filter in filters) {
+        val initVal = filter.init
+        if (!initVal.isNullOrEmpty()) {
+            defaults[filter.key] = initVal
+        }
+    }
+    return defaults
+}
 
 @HiltViewModel
 class HomeViewModel @Inject constructor(
@@ -90,11 +118,22 @@ class HomeViewModel @Inject constructor(
             size > MAX_CACHED_CLASSES
     }
 
-    private fun cacheKey(siteKey: String, classId: String): String = "$siteKey|$classId"
+    private fun cacheKey(siteKey: String, classId: String, filters: Map<String, String>): String {
+        if (filters.isEmpty()) return "$siteKey|$classId"
+        val filterPart = filters.entries.sortedBy { it.key }.joinToString("&") { "${it.key}=${it.value}" }
+        return "$siteKey|$classId|$filterPart"
+    }
 
-    private fun cacheCategory(siteKey: String, classId: String, items: List<Vod>, page: Int, pageCount: Int) {
+    private fun cacheCategory(
+        siteKey: String,
+        classId: String,
+        filters: Map<String, String>,
+        items: List<Vod>,
+        page: Int,
+        pageCount: Int,
+    ) {
         if (siteKey.isEmpty() || classId.isEmpty() || items.isEmpty()) return
-        categoryCache[cacheKey(siteKey, classId)] = CategoryCache(items, page, pageCount)
+        categoryCache[cacheKey(siteKey, classId, filters)] = CategoryCache(items, page, pageCount)
     }
 
     init {
@@ -128,18 +167,19 @@ class HomeViewModel @Inject constructor(
                 }
         }
 
-        // 2. 监听当前首页站点、配置重载事件与 Node.js 运行时就绪状态，驱动首页内容加载
+        // 2. 监听当前首页站点、配置重载事件、Node.js 运行时就绪状态与配置同步态，驱动首页内容加载
         viewModelScope.launch {
             combine(
                 repository.observeHomeSite(),
                 vodConfig.configReloadFlow,
                 nodeRuntime.loading,
-            ) { homeSite, reloadTime, nodeLoading ->
-                Triple(homeSite, reloadTime, nodeLoading)
-            }.collectLatest { (homeSite, _, nodeLoading) ->
+                vodConfig.isConfiguring,
+            ) { homeSite, reloadTime, nodeLoading, isConfiguring ->
+                Triple(homeSite, reloadTime, nodeLoading != null || isConfiguring)
+            }.collectLatest { (homeSite, _, blocked) ->
                 if (homeSite != null) {
-                    // 如果 Node.js 运行时正在下载或启动中，等待其就绪（变为 null）后再加载首页内容，避免必败的无效请求
-                    if (nodeLoading != null) {
+                    // 等待 Node.js 运行时就绪且配置/站点表替换完成后再加载首页内容，避免冷启动抢跑发双请求
+                    if (blocked) {
                         return@collectLatest
                     }
                     loadHome(homeSite)
@@ -151,6 +191,8 @@ class HomeViewModel @Inject constructor(
                             currentSite = null,
                             classes = emptyList(),
                             selectedClassId = "",
+                            filtersByClass = emptyMap(),
+                            selectedFiltersByClass = emptyMap(),
                             items = emptyList(),
                             isLoading = false,
                             isRefreshing = false,
@@ -171,8 +213,9 @@ class HomeViewModel @Inject constructor(
         loadJob?.cancel()
         refreshJob?.cancel()
 
+        val filters = current.selectedFiltersByClass[classId].orEmpty()
         // 命中缓存：直接复用已加载过的列表，不再发起请求
-        val cached = categoryCache[cacheKey(site.key, classId)]
+        val cached = categoryCache[cacheKey(site.key, classId, filters)]
         if (cached != null) {
             loadJob = null
             _uiState.update {
@@ -199,7 +242,81 @@ class HomeViewModel @Inject constructor(
                     error = null,
                 )
             }
-            loadCategory(site, classId, page = 1)
+            loadCategory(site, classId, page = 1, filters = filters)
+        }
+    }
+
+    /** 切换当前分类的某个筛选项：已选中则取消选中，未选中则选中，并立即刷新列表。 */
+    fun selectFilter(filterKey: String, value: VodFilterValue) {
+        val current = _uiState.value
+        val site = current.currentSite ?: return
+        val classId = current.selectedClassId
+        if (classId.isEmpty()) return
+
+        val oldFilters = current.selectedFiltersByClass[classId].orEmpty()
+        val newFilters = LinkedHashMap(oldFilters)
+        if (oldFilters[filterKey] == value.v) {
+            newFilters.remove(filterKey)
+        } else {
+            newFilters[filterKey] = value.v
+        }
+
+        applyClassFilters(site, classId, newFilters)
+    }
+
+    /** 重置当前分类筛选条件到默认状态并刷新列表。 */
+    fun resetFilters() {
+        val current = _uiState.value
+        val site = current.currentSite ?: return
+        val classId = current.selectedClassId
+        if (classId.isEmpty()) return
+
+        val defaultFilters = buildDefaultFiltersForClass(current.filtersByClass[classId].orEmpty())
+        if (defaultFilters == current.selectedFiltersByClass[classId].orEmpty()) return
+
+        applyClassFilters(site, classId, defaultFilters)
+    }
+
+    private fun applyClassFilters(site: Site, classId: String, filters: Map<String, String>) {
+        loadJob?.cancel()
+        refreshJob?.cancel()
+
+        val updatedSelected = LinkedHashMap(_uiState.value.selectedFiltersByClass)
+        if (filters.isEmpty()) {
+            updatedSelected.remove(classId)
+        } else {
+            updatedSelected[classId] = filters
+        }
+
+        val cached = categoryCache[cacheKey(site.key, classId, filters)]
+        if (cached != null) {
+            loadJob = null
+            _uiState.update {
+                it.copy(
+                    selectedFiltersByClass = updatedSelected,
+                    items = cached.items,
+                    page = cached.page,
+                    pageCount = cached.pageCount,
+                    isLoading = false,
+                    isLoadingMore = false,
+                    error = null,
+                )
+            }
+            return
+        }
+
+        loadJob = viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    selectedFiltersByClass = updatedSelected,
+                    page = 1,
+                    items = emptyList(),
+                    isLoading = true,
+                    isLoadingMore = false,
+                    error = null,
+                )
+            }
+            loadCategory(site, classId, page = 1, filters = filters)
         }
     }
 
@@ -225,26 +342,52 @@ class HomeViewModel @Inject constructor(
                 // 1. 重新拉取分类导航（站点可能新增/删除了分类）
                 val home = repository.getHomeContent(site)
                 val classes = home.classes.ifEmpty { _uiState.value.classes }
+                val filtersByClass = if (home.classes.isNotEmpty() || home.filters.isNotEmpty()) {
+                    buildFiltersByClass(home)
+                } else {
+                    _uiState.value.filtersByClass
+                }
                 val stillValid = classes.any { it.typeId == _uiState.value.selectedClassId }
                 val targetClassId = if (stillValid) {
                     _uiState.value.selectedClassId
                 } else {
                     classes.firstOrNull()?.typeId.orEmpty()
                 }
-                _uiState.update { it.copy(classes = classes, selectedClassId = targetClassId) }
+                val validClassIds = classes.mapTo(HashSet()) { it.typeId }
+                val mergedSelectedFilters = LinkedHashMap<String, Map<String, String>>().apply {
+                    _uiState.value.selectedFiltersByClass.forEach { (tid, sel) ->
+                        if (tid in validClassIds) put(tid, sel)
+                    }
+                    filtersByClass.forEach { (tid, list) ->
+                        if (!containsKey(tid)) {
+                            val defaults = buildDefaultFiltersForClass(list)
+                            if (defaults.isNotEmpty()) put(tid, defaults)
+                        }
+                    }
+                }
+                _uiState.update {
+                    it.copy(
+                        classes = classes,
+                        selectedClassId = targetClassId,
+                        filtersByClass = filtersByClass,
+                        selectedFiltersByClass = mergedSelectedFilters,
+                    )
+                }
 
                 // 分类列表变化后，清掉**当前站点**下已被删除分类的缓存（其他站点的缓存不动）
                 if (home.classes.isNotEmpty()) {
                     val sitePrefix = "${site.key}|"
-                    val validKeys = home.classes.map { cacheKey(site.key, it.typeId) }.toSet()
+                    val validPrefixes = home.classes.map { "${site.key}|${it.typeId}" }
                     categoryCache.keys.retainAll { key ->
-                        !key.startsWith(sitePrefix) || key in validKeys
+                        !key.startsWith(sitePrefix) ||
+                            validPrefixes.any { prefix -> key == prefix || key.startsWith("$prefix|") }
                     }
                 }
 
                 // 2. 刷新当前分类第一页
                 if (targetClassId.isNotEmpty()) {
-                    val res = repository.getCategoryContent(site, targetClassId, 1)
+                    val activeFilters = mergedSelectedFilters[targetClassId].orEmpty()
+                    val res = repository.getCategoryContent(site, targetClassId, 1, activeFilters)
                     if (res.list.isEmpty()) {
                         // 拉取失败或确实为空：保留原有列表，仅提示，避免刷成一片空白
                         _uiState.update { it.copy(message = "刷新失败，请检查网络或站点") }
@@ -262,6 +405,7 @@ class HomeViewModel @Inject constructor(
                         cacheCategory(
                             site.key,
                             targetClassId,
+                            activeFilters,
                             deduplicated,
                             res.page.coerceAtLeast(1),
                             res.pageCount.coerceAtLeast(1),
@@ -369,9 +513,6 @@ class HomeViewModel @Inject constructor(
                         message = msg,
                     )
                 }
-                _uiState.value.currentSite?.let { site ->
-                    loadHome(site)
-                }
             }
         }
     }
@@ -384,8 +525,9 @@ class HomeViewModel @Inject constructor(
         if (current.isLoading || current.isLoadingMore || current.isRefreshing) return
         if (current.page >= current.pageCount) return
 
+        val filters = current.currentSelectedFilters
         viewModelScope.launch {
-            loadCategory(site, classId, page = current.page + 1)
+            loadCategory(site, classId, page = current.page + 1, filters = filters)
         }
     }
 
@@ -401,6 +543,8 @@ class HomeViewModel @Inject constructor(
                     currentSite = site,
                     classes = emptyList(),
                     selectedClassId = "",
+                    filtersByClass = emptyMap(),
+                    selectedFiltersByClass = emptyMap(),
                     items = emptyList(),
                     isLoading = true,
                     isLoadingMore = false,
@@ -413,17 +557,26 @@ class HomeViewModel @Inject constructor(
             val res = repository.getHomeContent(site)
             val classes = res.classes
             val firstClassId = classes.firstOrNull()?.typeId.orEmpty()
+            val filtersByClass = buildFiltersByClass(res)
+            val initialSelected = buildInitialSelectedFilters(filtersByClass)
 
             _uiState.update {
                 it.copy(
                     classes = classes,
                     selectedClassId = firstClassId,
+                    filtersByClass = filtersByClass,
+                    selectedFiltersByClass = initialSelected,
                     isLoading = firstClassId.isNotEmpty(),
                 )
             }
 
             if (firstClassId.isNotEmpty()) {
-                loadCategory(site, firstClassId, page = 1)
+                loadCategory(
+                    site = site,
+                    classId = firstClassId,
+                    page = 1,
+                    filters = initialSelected[firstClassId].orEmpty(),
+                )
             } else if (res.list.isNotEmpty()) {
                 // 部分站点直接在 homeContent 返回推荐视频
                 val deduplicated = res.list.distinctBy { item -> "${item.siteKey.ifEmpty { site.key }}_${item.vodId}" }
@@ -439,17 +592,58 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    private suspend fun loadCategory(site: Site, classId: String, page: Int) {
+    private fun buildFiltersByClass(res: Result): Map<String, List<VodFilter>> {
+        val map = LinkedHashMap<String, List<VodFilter>>()
+        res.filters.forEach { (typeId, list) ->
+            val valid = list.filter { it.values.isNotEmpty() }
+            if (valid.isNotEmpty()) {
+                map[typeId] = valid
+            }
+        }
+        res.classes.forEach { vodClass ->
+            if (!map.containsKey(vodClass.typeId) && vodClass.filters.isNotEmpty()) {
+                val valid = vodClass.filters.filter { it.values.isNotEmpty() }
+                if (valid.isNotEmpty()) {
+                    map[vodClass.typeId] = valid
+                }
+            }
+        }
+        return map
+    }
+
+    private fun buildInitialSelectedFilters(
+        filtersByClass: Map<String, List<VodFilter>>,
+    ): Map<String, Map<String, String>> {
+        val result = LinkedHashMap<String, Map<String, String>>()
+        filtersByClass.forEach { (typeId, filters) ->
+            val defaults = buildDefaultFiltersForClass(filters)
+            if (defaults.isNotEmpty()) {
+                result[typeId] = defaults
+            }
+        }
+        return result
+    }
+
+    private suspend fun loadCategory(
+        site: Site,
+        classId: String,
+        page: Int,
+        filters: Map<String, String> = emptyMap(),
+    ) {
         val isFirst = page == 1
         _uiState.update {
             if (isFirst) it.copy(isLoading = true, error = null)
             else it.copy(isLoadingMore = true)
         }
 
-        val res = repository.getCategoryContent(site, classId, page)
+        val res = repository.getCategoryContent(site, classId, page, filters)
 
-        // 请求返回时用户已切到别的分类：丢弃过期结果，避免旧分类数据覆盖当前分类
-        if (classId != _uiState.value.selectedClassId) {
+        // 请求返回时用户已切到别的站点、分类或筛选条件：丢弃过期结果，避免旧数据覆盖当前列表
+        val latest = _uiState.value
+        if (site.key != latest.currentSite?.key ||
+            classId != latest.selectedClassId ||
+            filters != latest.currentSelectedFilters
+        ) {
             _uiState.update { it.copy(isLoadingMore = false) }
             return
         }
@@ -477,9 +671,12 @@ class HomeViewModel @Inject constructor(
                 )
             }
             // 结果写入分类缓存，供下次切换回来时直接复用
-            if (classId == _uiState.value.selectedClassId && site.key == _uiState.value.currentSite?.key) {
-                val snapshot = _uiState.value
-                cacheCategory(site.key, classId, snapshot.items, snapshot.page, snapshot.pageCount)
+            val snapshot = _uiState.value
+            if (site.key == snapshot.currentSite?.key &&
+                classId == snapshot.selectedClassId &&
+                filters == snapshot.currentSelectedFilters
+            ) {
+                cacheCategory(site.key, classId, filters, snapshot.items, snapshot.page, snapshot.pageCount)
             }
         }
     }

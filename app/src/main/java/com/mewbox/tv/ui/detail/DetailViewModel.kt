@@ -302,7 +302,7 @@ class DetailViewModel @Inject constructor(
                 val result = repository.resolvePlay(site, flag.flag, episode.url)
                 val primaryPlayUrl = result.playUrls.firstOrNull { it.url == result.url }
                     ?: result.playUrls.firstOrNull()
-                    ?: PlayUrl("默认", result.url)
+                    ?: result.url.takeIf { it.isNotBlank() }?.let { PlayUrl("默认", it) }
 
                 lastHeaders = result.header
                 lastFormat = result.format
@@ -521,7 +521,7 @@ class DetailViewModel @Inject constructor(
                 return@launch
             }
             if (result.url.isBlank()) {
-                val msg = "该线路解析链接为空，请尝试切换其它线路或换源"
+                val msg = result.msg.trim().ifBlank { "该线路解析链接为空，请尝试切换其它线路或换源" }
                 _uiState.update { it.copy(toastMessage = msg) }
                 AppToast.show(msg)
                 players.reportError(msg)
@@ -599,8 +599,7 @@ class DetailViewModel @Inject constructor(
             ?: return
         val currentPosition = players.state.value.currentPosition
         val isPlayerActive = players.state.value.playUrl.isNotEmpty() ||
-            players.state.value.playbackState != PlaybackState.IDLE ||
-            _uiState.value.isResolvingPlay
+            players.state.value.playbackState != PlaybackState.IDLE
         val shouldPlay = playImmediately || isPlayerActive
         prefetchJob?.cancel()
         _uiState.update {

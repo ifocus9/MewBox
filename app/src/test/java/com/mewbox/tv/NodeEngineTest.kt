@@ -2,6 +2,7 @@ package com.mewbox.tv
 
 import com.fongmi.nodejs.Crypto
 import com.fongmi.nodejs.NodeBundle
+import com.fongmi.nodejs.NodeClient
 import com.fongmi.nodejs.NodeConfigMapper
 import com.fongmi.nodejs.NodeRoute
 import com.mewbox.tv.engine.nodejs.NodeSpider
@@ -103,6 +104,24 @@ class NodeEngineTest {
 
         val sha256 = Crypto.sha256("hello")
         assertEquals("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824", sha256)
+    }
+
+    @Test
+    fun testExtractErrorMessage() {
+        assertEquals(
+            "还没有配置百度Cookie，请先前往配置页面配置",
+            NodeClient.extractErrorMessage("""{"message":"还没有配置百度Cookie，请先前往配置页面配置"}"""),
+        )
+        assertEquals(
+            "夸克Cookie失效",
+            NodeClient.extractErrorMessage("""{"msg":"夸克Cookie失效"}"""),
+        )
+        assertEquals("", NodeClient.extractErrorMessage("Internal Server Error"))
+        assertEquals("", NodeClient.extractErrorMessage(""))
+
+        val error = NodeClient.NodeHttpException(500, "还没有配置夸克 Cookie")
+        assertEquals(500, error.code)
+        assertEquals("还没有配置夸克 Cookie", error.serverMessage)
     }
 }
 
