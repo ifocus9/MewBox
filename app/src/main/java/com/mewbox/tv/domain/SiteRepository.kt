@@ -51,6 +51,8 @@ class SiteRepository @Inject constructor(
 ) {
     companion object {
         const val PUSH_KEY = VodConfig.PUSH_KEY
+        internal const val DETAIL_EMPTY_RETRY_MAX_ELAPSED_MS = 3_000L
+        internal const val DETAIL_ERROR_RETRY_MAX_ELAPSED_MS = 10_000L
 
         private val FALLBACK_PUSH_SITE = Site(
             key = PUSH_KEY,
@@ -61,6 +63,29 @@ class SiteRepository @Inject constructor(
             quickSearch = false,
             changeable = false,
         )
+
+        /**
+         * 仅在 Node/T4 源“短耗时瞬时返回空”时重试（例如后台切换唤醒间隙）；
+         * 若单次详情请求已耗时较久仍为空，说明远端站点已超时或无数据，避免重复阻塞数十秒。
+         */
+        internal fun shouldRetryEmptyDetail(
+            site: Site,
+            elapsedMs: Long,
+            attempt: Int,
+            maxAttempts: Int,
+        ): Boolean {
+            if (attempt >= maxAttempts) return false
+            val isRuntimeSite = site.type == 3 || site.api.startsWith("node:") || site.type == 4
+            return isRuntimeSite && elapsedMs < DETAIL_EMPTY_RETRY_MAX_ELAPSED_MS
+        }
+
+        internal fun shouldRetryDetailError(
+            elapsedMs: Long,
+            attempt: Int,
+            maxAttempts: Int,
+        ): Boolean {
+            return attempt < maxAttempts && elapsedMs < DETAIL_ERROR_RETRY_MAX_ELAPSED_MS
+        }
     }
 
     /** 监听当前默认首页站点 */
@@ -143,23 +168,23 @@ class SiteRepository @Inject constructor(
         var lastError: Exception? = null
         val maxAttempts = 3
         for (attempt in 1..maxAttempts) {
+            val startedAtMs = System.currentTimeMillis()
             try {
                 val result = router.spider(site).detailContent(listOf(vodId))
-                if (result.list.isNotEmpty() || attempt == maxAttempts) {
+                val elapsedMs = System.currentTimeMillis() - startedAtMs
+                if (result.list.isNotEmpty() || !shouldRetryEmptyDetail(site, elapsedMs, attempt, maxAttempts)) {
                     return@withContext result
                 }
-                // 若列表为空且为 Node/T4 引擎源，可能正逢切回前台拉起间隙，稍作等待重试
-                if (site.type == 3 || site.api.startsWith("node:") || site.type == 4) {
-                    delay(500L * attempt)
-                } else {
-                    return@withContext result
-                }
+                delay(500L * attempt)
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                val elapsedMs = System.currentTimeMillis() - startedAtMs
                 lastError = e
                 Timber.w(e, "获取详情异常 (尝试 $attempt/$maxAttempts): ${site.name}, vodId=$vodId")
-                if (attempt < maxAttempts) {
-                    delay(500L * attempt)
+                if (!shouldRetryDetailError(elapsedMs, attempt, maxAttempts)) {
+                    break
                 }
+                delay(500L * attempt)
             }
         }
         if (lastError != null) {

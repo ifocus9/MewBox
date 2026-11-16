@@ -83,29 +83,14 @@ class Players @Inject constructor(
     @OptIn(UnstableApi::class)
     val exoPlayer: ExoPlayer = run {
         // 对齐 webhtv / FongMi:
-        // 1. 使用 ExoBufferBudget 根据设备可用 RAM 与 largeHeap 堆上限自适应计算缓冲配额（大内存手机最高 256MB，低配电视盒子防 OOM）
+        // 1. 使用 ExoBufferBudget 根据设备可用 RAM 与 largeHeap 堆上限自适应计算缓冲配额（大内存手机最高 512MB，低配电视盒子防 OOM）
         val targetBufferBytes = com.mewbox.tv.player.exo.ExoBufferBudget.getEffectiveTargetBytes(context)
-        Timber.d("ExoPlayer 初始化缓冲预算: targetBufferBytes=%d MB", targetBufferBytes / (1024 * 1024))
-
-        // 2. bufferForPlaybackMs 设为 1000ms：首帧缓冲够 1 秒立即渲染出画，配合解码器预热实现毫秒级秒开
-        // 3. bufferForPlaybackAfterRebufferMs 设为 5000ms：遇网盘抖动重缓冲后蓄满 5 秒再恢复，彻底消除“播1秒卡3秒”连环卡顿
-        // 4. minBufferMs=50_000 / maxBufferMs=120_000：对齐 FongMi 50s 低水位并拉宽至 120s 高水位，保持网盘长连接持续拉流
-        // 5. setBackBuffer(15_000, true)：保留最近 15 秒关键帧历史数据，短距离回退直接命中内存无需重连网盘
-        // 6. setPrioritizeTimeOverSizeThresholds(false)：对齐 webhtv，避免高码率原盘在 minBufferMs 水位处因超过字节上限引发高频拉流/断流震荡
-        val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
-            .setBufferDurationsMs(
-                /* minBufferMs = */ 50_000,
-                /* maxBufferMs = */ 120_000,
-                /* bufferForPlaybackMs = */ 1_000,
-                /* bufferForPlaybackAfterRebufferMs = */ 5_000,
-            )
-            .setTargetBufferBytes(targetBufferBytes)
-            .setBackBuffer(
-                /* backBufferDurationMs = */ 15_000,
-                /* retainBackBufferFromKeyframe = */ true,
-            )
-            .setPrioritizeTimeOverSizeThresholds(false)
-            .build()
+        Timber.d(
+            "ExoPlayer 初始化缓冲预算: targetBufferBytes=%d MB, heapMax=%d MB",
+            targetBufferBytes / (1024 * 1024),
+            Runtime.getRuntime().maxMemory() / (1024 * 1024),
+        )
+        val loadControl = buildLoadControl(targetBufferBytes)
 
         // 5. 启用解码器降级容错 + 扩展解码器开启 + 解码器预热（消除首次起播解码器冷启动等待）
         val renderersFactory = object : androidx.media3.exoplayer.DefaultRenderersFactory(context) {
@@ -324,15 +309,9 @@ class Players @Inject constructor(
         stopBufferingPolling()
         try {
             exoPlayer.stop()
+            exoPlayer.clearMediaItems()
         } catch (_: Exception) {}
-        _state.update {
-            it.copy(
-                playbackState = PlaybackState.ERROR,
-                errorMessage = message,
-                playUrl = url.ifEmpty { it.playUrl },
-                networkSpeed = "",
-            )
-        }
+        _state.update { buildErrorState(current = it, message = message, url = url) }
         com.mewbox.tv.util.AppToast.show(message)
     }
 
@@ -522,20 +501,7 @@ class Players @Inject constructor(
         stopBufferingPolling()
         exoPlayer.stop()
         exoPlayer.clearMediaItems()
-        _state.update {
-            it.copy(
-                playbackState = PlaybackState.IDLE,
-                isPlaying = false,
-                currentPosition = 0L,
-                duration = 0L,
-                videoWidth = 0,
-                videoHeight = 0,
-                networkSpeed = "",
-                subtitleTracks = emptyList(),
-                audioTracks = emptyList(),
-                videoTracks = emptyList(),
-            )
-        }
+        _state.update { buildStoppedState(it) }
     }
 
     fun release() {
@@ -837,6 +803,84 @@ class Players @Inject constructor(
     companion object {
         const val DEFAULT_USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+        internal const val MIN_BUFFER_MS = 50_000
+        internal const val MAX_BUFFER_MS = 120_000
+        internal const val BUFFER_FOR_PLAYBACK_MS = 1_000
+        internal const val BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 5_000
+        internal const val BACK_BUFFER_DURATION_MS = 0
+
+        /**
+         * 停止播放后重置单次会话状态，保留用户偏好的倍速与画面拉伸模式，
+         * 避免上一次的直连 URL / 请求头 / 错误态残留并泄漏给下一部影片的“媒体信息”面板。
+         */
+        internal fun buildStoppedState(current: PlayerState): PlayerState {
+            return current.copy(
+                playbackState = PlaybackState.IDLE,
+                isPlaying = false,
+                currentPosition = 0L,
+                duration = 0L,
+                bufferedPosition = 0L,
+                errorMessage = null,
+                playUrl = "",
+                headers = emptyMap(),
+                title = "",
+                videoWidth = 0,
+                videoHeight = 0,
+                networkSpeed = "",
+                subtitleTracks = emptyList(),
+                audioTracks = emptyList(),
+                videoTracks = emptyList(),
+                isSubtitleDisabled = false,
+            )
+        }
+
+        /**
+         * 构造错误状态：仅当明确传入当前流 URL 时保留其请求头与标题，
+         * 避免无 URL 报错时错误继承上一部影片的直连地址与请求头。
+         */
+        internal fun buildErrorState(
+            current: PlayerState,
+            message: String,
+            url: String = "",
+        ): PlayerState {
+            val sameStream = url.isNotEmpty() && url == current.playUrl
+            return current.copy(
+                playbackState = PlaybackState.ERROR,
+                isPlaying = false,
+                errorMessage = message,
+                playUrl = url,
+                headers = if (sameStream) current.headers else emptyMap(),
+                title = if (sameStream) current.title else "",
+                networkSpeed = "",
+            )
+        }
+
+        /**
+         * 构造播放器缓冲控制器：
+         * - bufferForPlaybackMs=1000ms：首帧缓冲够 1 秒立即出画，配合解码器预热实现秒开
+         * - bufferForPlaybackAfterRebufferMs=5000ms：遇网盘抖动重缓冲后蓄满 5 秒再恢复，避免“播 1 秒卡 3 秒”
+         * - minBufferMs=50_000 / maxBufferMs=120_000：在 50~120 秒区间持续拉流，保持网盘长连接稳定
+         * - setBackBuffer(0, false)：对齐 webhtv 默认关闭后向回退缓存，防止 4K Remux 历史关键帧挤占 targetBufferBytes，将内存配额全量留给前向预读
+         * - setPrioritizeTimeOverSizeThresholds(false)：以字节预算为硬天花板，避免高码率原盘撑爆堆内存引发 OOM
+         */
+        @OptIn(UnstableApi::class)
+        internal fun buildLoadControl(targetBufferBytes: Int): androidx.media3.exoplayer.DefaultLoadControl {
+            return androidx.media3.exoplayer.DefaultLoadControl.Builder()
+                .setBufferDurationsMs(
+                    MIN_BUFFER_MS,
+                    MAX_BUFFER_MS,
+                    BUFFER_FOR_PLAYBACK_MS,
+                    BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS,
+                )
+                .setTargetBufferBytes(targetBufferBytes)
+                .setBackBuffer(
+                    /* backBufferDurationMs = */ BACK_BUFFER_DURATION_MS,
+                    /* retainBackBufferFromKeyframe = */ false,
+                )
+                .setPrioritizeTimeOverSizeThresholds(false)
+                .build()
+        }
 
         /**
          * 智能推断媒体流 MIME 类型（对齐 FongMi / MewPlayer MpvLifecycleCoordinator）

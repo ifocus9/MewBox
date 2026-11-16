@@ -60,6 +60,7 @@ class DetailViewModel @Inject constructor(
     )
     val uiState: StateFlow<DetailUiState> = _uiState.asStateFlow()
 
+    private var detailJob: Job? = null
     private var playJob: Job? = null
     private var prefetchJob: Job? = null
     private var tmdbJob: Job? = null
@@ -148,7 +149,16 @@ class DetailViewModel @Inject constructor(
         currentSiteKey = siteKey
         currentVodId = vodId
 
-        viewModelScope.launch {
+        // 切入新影片加载或重试前，先中止旧请求并清空单例播放器残留直连/请求头，避免加载期间“媒体信息”误显上一部片的数据
+        detailJob?.cancel()
+        playJob?.cancel()
+        prefetchJob?.cancel()
+        playbackTracker.clearSession()
+        lastHeaders = emptyMap()
+        lastFormat = ""
+        players.stop()
+
+        detailJob = viewModelScope.launch {
             _uiState.update {
                 it.copy(
                     isLoading = true,
@@ -924,7 +934,9 @@ class DetailViewModel @Inject constructor(
 
     override fun onCleared() {
         super.onCleared()
+        detailJob?.cancel()
         playJob?.cancel()
+        prefetchJob?.cancel()
         sourceCoordinator.cancelAll()
         playbackTracker.handleCleared(_uiState.value.opening, _uiState.value.ending)
     }
