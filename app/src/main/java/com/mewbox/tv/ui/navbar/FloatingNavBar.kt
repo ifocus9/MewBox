@@ -616,22 +616,22 @@ private fun NavTabItem(
                 painter = painterResource(tab.iconRes),
                 contentDescription = tab.label,
                 tint = iconColor,
-                modifier = Modifier.size(24.dp),
+                modifier = Modifier.size(22.dp),
             )
         } else if (tab.icon != null) {
             Icon(
                 imageVector = tab.icon,
                 contentDescription = tab.label,
                 tint = iconColor,
-                modifier = Modifier.size(24.dp),
+                modifier = Modifier.size(22.dp),
             )
         }
         if (selected) {
             Text(
                 text = tab.label,
                 style = MaterialTheme.typography.labelSmall.copy(
-                    fontSize = 12.sp,
-                    lineHeight = 14.sp,
+                    fontSize = 11.sp,
+                    lineHeight = 13.sp,
                     fontWeight = FontWeight.SemiBold,
                 ),
                 color = textColor,
@@ -719,7 +719,7 @@ fun FloatingNavSearchButton(
             imageVector = Icons.Rounded.Search,
             contentDescription = "搜索",
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(30.dp),
+            modifier = Modifier.size(26.dp),
         )
     }
 }

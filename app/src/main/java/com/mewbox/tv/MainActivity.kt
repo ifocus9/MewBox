@@ -615,7 +615,7 @@ private fun AdaptiveFloatingNavBar(
         }
         Row(
             modifier = modifier
-                .widthIn(max = 348.dp)
+                .widthIn(max = 356.dp)
                 .fillMaxWidth()
                 .windowInsetsPadding(WindowInsets.navigationBars)
                 .padding(horizontal = 16.dp)
@@ -642,7 +642,7 @@ private fun AdaptiveFloatingNavBar(
     } else {
         Row(
             modifier = modifier
-                .widthIn(max = 348.dp)
+                .widthIn(max = 356.dp)
                 .fillMaxWidth()
                 .windowInsetsPadding(WindowInsets.navigationBars)
                 .padding(horizontal = 16.dp)
@@ -760,14 +760,14 @@ private fun MewFloatingBottomBar(
                                     } else {
                                         Color(0xFF2C2C2E)
                                     },
-                                    modifier = Modifier.size(24.dp),
+                                    modifier = Modifier.size(22.dp),
                                 )
                                 if (isSelected) {
                                     Text(
                                         text = tab.label,
                                         style = MaterialTheme.typography.labelSmall.copy(
-                                            fontSize = 12.sp,
-                                            lineHeight = 14.sp,
+                                            fontSize = 11.sp,
+                                            lineHeight = 13.sp,
                                             fontWeight = FontWeight.SemiBold,
                                         ),
                                         color = MaterialTheme.colorScheme.primary,
@@ -824,7 +824,7 @@ private fun MewFloatingSearchButton(
                 imageVector = Icons.Rounded.Search,
                 contentDescription = "搜索",
                 tint = Color(0xFF2C2C2E),
-                modifier = Modifier.size(30.dp),
+                modifier = Modifier.size(26.dp),
             )
         }
     }

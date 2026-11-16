@@ -124,7 +124,7 @@ fun HomeBackToTopButton(
             Icon(
                 imageVector = Icons.Default.KeyboardArrowUp,
                 contentDescription = "回到顶部",
-                tint = MaterialTheme.colorScheme.primary,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(24.dp),
             )
         }
