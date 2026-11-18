@@ -1,5 +1,9 @@
 package com.mewbox.tv.ui.search
 
+import com.mewbox.tv.ui.components.MewOverlayVariant
+import com.mewbox.tv.ui.components.MewSheetShell
+import com.mewbox.tv.ui.components.OverlayTokens
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -13,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -44,16 +49,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import com.mewbox.tv.bean.Site
 
 /**
- * 搜索指定站点筛选对话框
+ * 搜索指定站点筛选底部抽屉
  * - 默认按源配置的 searchable 展示是否支持搜索
  * - 在可搜索源中，支持单点切换开启/禁用（即时持久化到数据库）
  * - 支持源名称快速过滤搜索
- * - 点击站点主体行直接设为单站搜索目标并关闭弹窗
+ * - 点击站点主体行直接设为单站搜索目标并关闭抽屉
  */
 @Composable
 fun SearchSiteFilterDialog(
@@ -69,18 +72,16 @@ fun SearchSiteFilterDialog(
         else sites.filter { it.name.contains(filterQuery.trim(), ignoreCase = true) }
     }
 
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-    ) {
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = Color.White,
-            modifier = Modifier
-                .fillMaxWidth(0.92f)
-                .heightIn(max = 560.dp),
+    MewSheetShell(
+        onDismiss = onDismiss,
+        variant = MewOverlayVariant.Light,
+    ) { focusModifier ->
+        Column(
+            modifier = focusModifier
+                .fillMaxWidth()
+                .padding(horizontal = OverlayTokens.Padding, vertical = 8.dp)
+                .navigationBarsPadding(),
         ) {
-            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
                 // 站点筛选输入框（当站点较多时提供即时过滤）
                 if (sites.size > 6) {
                     Row(
@@ -140,7 +141,9 @@ fun SearchSiteFilterDialog(
                 // 站点列表
                 LazyColumn(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.weight(1f, fill = false),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 440.dp),
                 ) {
                     // 单站点条目
                     items(filteredSites, key = { it.key }) { site ->
@@ -226,7 +229,8 @@ fun SearchSiteFilterDialog(
                         }
                     }
                 }
+
+                Spacer(modifier = Modifier.height(16.dp))
             }
         }
-    }
 }

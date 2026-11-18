@@ -129,7 +129,9 @@ fun DirectPlayScreen(
                 currentEpisodeName = state.selectedEpisode?.name ?: "",
                 hasPrevEpisode = state.hasPreviousEpisode,
                 hasNextEpisode = state.hasNextEpisode,
-                hasMultiQuality = state.playUrls.size > 1 || (state.playUrls.size == 1 && state.playUrls.first().name != "默认"),
+                playUrls = state.playUrls,
+                selectedPlayUrl = state.selectedPlayUrl,
+                onSelectPlayUrl = { viewModel.selectPlayUrl(it) },
                 isResolvingPlay = state.isResolvingPlay || (state.isLoading && !state.isAutoSearching),
                 isAutoSearching = state.isAutoSearching,
                 autoSearchMessage = state.autoSearchMessage,
@@ -169,9 +171,6 @@ fun DirectPlayScreen(
                     onToggleSort = { viewModel.toggleEpisodeSort() },
                     onToggleCompact = { viewModel.toggleEpisodeCompact() },
                     onSelectFlag = { flag -> viewModel.selectFlag(flag, playImmediately = true) },
-                    playUrls = state.playUrls,
-                    selectedPlayUrl = state.selectedPlayUrl,
-                    onSelectPlayUrl = { viewModel.selectPlayUrl(it) },
                     onSelectEpisode = { ep ->
                         viewModel.selectEpisode(ep)
                         showFullscreenEpisodeDrawer = false

@@ -10,6 +10,7 @@ import com.mewbox.tv.bean.Episode
 import com.mewbox.tv.bean.Flag
 import com.mewbox.tv.bean.History
 import com.mewbox.tv.bean.PlayUrl
+import com.mewbox.tv.bean.Result
 import com.mewbox.tv.bean.Site
 import com.mewbox.tv.bean.Vod
 import com.mewbox.tv.domain.SiteRepository
@@ -18,7 +19,10 @@ import com.mewbox.tv.player.PlayerTrack
 import com.mewbox.tv.player.Players
 import com.mewbox.tv.util.AppToast
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -60,13 +64,60 @@ class DetailViewModel @Inject constructor(
     )
     val uiState: StateFlow<DetailUiState> = _uiState.asStateFlow()
 
+    private data class InFlightResolve(
+        val siteKey: String,
+        val flag: String,
+        val episodeUrl: String,
+        val deferred: Deferred<Result>,
+    )
+
     private var detailJob: Job? = null
     private var playJob: Job? = null
     private var prefetchJob: Job? = null
+    private var inFlightResolve: InFlightResolve? = null
     private var tmdbJob: Job? = null
     private var tmdbRunningName: String? = null
     private var lastHeaders: Map<String, String> = emptyMap()
     private var lastFormat: String = ""
+
+    private fun cancelPrefetch() {
+        prefetchJob?.cancel()
+        prefetchJob = null
+        inFlightResolve?.deferred?.cancel()
+        inFlightResolve = null
+    }
+
+    private fun getOrStartResolve(
+        site: Site,
+        flag: Flag,
+        episode: Episode,
+        forceRefresh: Boolean = false,
+    ): InFlightResolve {
+        val existing = inFlightResolve?.takeIf {
+            !forceRefresh &&
+                it.siteKey == site.key &&
+                it.flag == flag.flag &&
+                it.episodeUrl == episode.url &&
+                !it.deferred.isCancelled
+        }
+        if (existing != null) {
+            Timber.i("复用进行中的预解析请求: site=${site.name}, flag=${flag.flag}, ep=${episode.name}")
+            return existing
+        }
+        inFlightResolve?.deferred?.cancel()
+        Timber.i("发起直链解析请求: site=${site.name}, flag=${flag.flag}, ep=${episode.name}, forceRefresh=$forceRefresh")
+        val deferred = viewModelScope.async {
+            repository.resolvePlay(site, flag.flag, episode.url)
+        }
+        return InFlightResolve(
+            siteKey = site.key,
+            flag = flag.flag,
+            episodeUrl = episode.url,
+            deferred = deferred,
+        ).also {
+            inFlightResolve = it
+        }
+    }
 
     private fun startTmdbLoad(name: String) {
         val cleaned = TmdbClient.cleanTitle(name)
@@ -152,7 +203,7 @@ class DetailViewModel @Inject constructor(
         // 切入新影片加载或重试前，先中止旧请求并清空单例播放器残留直连/请求头，避免加载期间“媒体信息”误显上一部片的数据
         detailJob?.cancel()
         playJob?.cancel()
-        prefetchJob?.cancel()
+        cancelPrefetch()
         playbackTracker.clearSession()
         lastHeaders = emptyMap()
         lastFormat = ""
@@ -305,11 +356,22 @@ class DetailViewModel @Inject constructor(
 
     private fun prefetchPlayUrls(site: Site, flag: Flag, episode: Episode) {
         prefetchJob?.cancel()
+        val request = getOrStartResolve(site, flag, episode)
         prefetchJob = viewModelScope.launch {
             _uiState.update { it.copy(isResolvingPlay = true) }
             try {
                 Timber.d("预解析清晰度: site=${site.name}, flag=${flag.flag}, ep=${episode.name}")
-                val result = repository.resolvePlay(site, flag.flag, episode.url)
+                val result = request.deferred.await()
+                if (result.needSniff) {
+                    _uiState.update {
+                        it.copy(
+                            isResolvingPlay = false,
+                            playUrls = emptyList(),
+                            selectedPlayUrl = null,
+                        )
+                    }
+                    return@launch
+                }
                 val primaryPlayUrl = result.playUrls.firstOrNull { it.url == result.url }
                     ?: result.playUrls.firstOrNull()
                     ?: result.url.takeIf { it.isNotBlank() }?.let { PlayUrl("默认", it) }
@@ -324,9 +386,15 @@ class DetailViewModel @Inject constructor(
                         selectedPlayUrl = primaryPlayUrl,
                     )
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Timber.w(e, "预解析清晰度失败: site=${site.name}, flag=${flag.flag}, ep=${episode.name}")
                 _uiState.update { it.copy(isResolvingPlay = false) }
+            } finally {
+                if (inFlightResolve === request && request.deferred.isCompleted) {
+                    inFlightResolve = null
+                }
             }
         }
     }
@@ -359,6 +427,8 @@ class DetailViewModel @Inject constructor(
                 if (shouldAutoPlay) {
                     _uiState.update { it.copy(startInFullscreen = true) }
                     playEpisode(flag, ep, 0L)
+                } else {
+                    prefetchPlayUrls(targetSite, flag, ep)
                 }
             },
             onFailed = { errorMsg ->
@@ -419,7 +489,7 @@ class DetailViewModel @Inject constructor(
             ?: playbackTracker.activeSession?.lastKnownPositionMs
             ?: 0L
         _uiState.update { it.copy(toastMessage = "正在刷新播放...") }
-        playEpisode(flag, ep, currentPosition)
+        playEpisode(flag, ep, currentPosition, forceRefresh = true)
     }
 
     fun startPlayback() {
@@ -443,35 +513,7 @@ class DetailViewModel @Inject constructor(
                 history.position
             } else 0L
 
-            val site = _uiState.value.currentSite
-            val vod = _uiState.value.vod
-            val selectedUrl = _uiState.value.selectedPlayUrl
-            // 若预解析已完成且有效，直接起播以实现 0 RTT 极速秒播
-            if (site != null && vod != null && selectedUrl != null && selectedUrl.url.isNotBlank() && !Players.isIsoFormat(selectedUrl.url, ep.name, lastFormat)) {
-                prefetchJob?.cancel()
-                val (hasPrev, hasNext) = DetailEpisodeNav.checkHasNavEpisodes(flag, ep, _uiState.value.isEpisodeReversed)
-                _uiState.update {
-                    it.copy(
-                        selectedFlag = flag,
-                        selectedEpisode = ep,
-                        hasPreviousEpisode = hasPrev,
-                        hasNextEpisode = hasNext,
-                        isResolvingPlay = false,
-                    )
-                }
-                playbackTracker.createSession(site, vod, flag, ep, _uiState.value.opening, _uiState.value.ending)
-                val title = "${vod.vodName} - ${ep.name} (${selectedUrl.name})"
-                val effectiveStartPosition = if (_uiState.value.opening > 0L) maxOf(resumePos, _uiState.value.opening) else resumePos
-                players.play(
-                    url = selectedUrl.url,
-                    headers = lastHeaders,
-                    title = title,
-                    startPosition = effectiveStartPosition,
-                    format = lastFormat,
-                )
-            } else {
-                playEpisode(flag, ep, resumePos)
-            }
+            playEpisode(flag, ep, resumePos)
         }
     }
 
@@ -479,15 +521,68 @@ class DetailViewModel @Inject constructor(
         val handled = playbackTracker.handleExitFullscreen(_uiState.value.opening, _uiState.value.ending)
         if (!handled) {
             playJob?.cancel()
+            cancelPrefetch()
             _uiState.update { it.copy(isResolvingPlay = false) }
         }
     }
 
-    fun playEpisode(flag: Flag, episode: Episode, startPosition: Long = 0L) {
+    fun playEpisode(
+        flag: Flag,
+        episode: Episode,
+        startPosition: Long = 0L,
+        forceRefresh: Boolean = false,
+    ) {
         val site = _uiState.value.currentSite ?: return
         val vod = _uiState.value.vod ?: return
 
+        val isSameEpisode = _uiState.value.selectedFlag?.flag == flag.flag &&
+            _uiState.value.selectedEpisode?.url == episode.url
+        val resolvedUrl = _uiState.value.selectedPlayUrl?.takeIf {
+            !forceRefresh && isSameEpisode && it.url.isNotBlank()
+        }
+
+        // 1. 若预解析已完成且当前集已持有有效清晰度链接，直接起播实现 0 RTT 极速秒播
+        if (resolvedUrl != null) {
+            cancelPrefetch()
+            playJob?.cancel()
+            playbackTracker.saveActiveSessionIfSucceeded(_uiState.value.opening, _uiState.value.ending)
+            playbackTracker.clearSession()
+            val (hasPrev, hasNext) = DetailEpisodeNav.checkHasNavEpisodes(flag, episode, _uiState.value.isEpisodeReversed)
+            _uiState.update {
+                it.copy(
+                    selectedFlag = flag,
+                    selectedEpisode = episode,
+                    hasPreviousEpisode = hasPrev,
+                    hasNextEpisode = hasNext,
+                    isResolvingPlay = false,
+                )
+            }
+            if (Players.isIsoFormat(resolvedUrl.url, episode.name, lastFormat)) {
+                players.stop()
+                Timber.w("检测到 ISO 原盘镜像，拦截播放: site=${site.name}, flag=${flag.flag}, ep=${episode.name}, url=${resolvedUrl.url}")
+                val msg = "检测到该资源为 ISO 原盘镜像，内置播放器暂不支持，请切换其它线路或格式"
+                _uiState.update { it.copy(toastMessage = msg) }
+                AppToast.show(msg)
+                players.reportError(msg, resolvedUrl.url)
+                return
+            }
+            playbackTracker.createSession(site, vod, flag, episode, _uiState.value.opening, _uiState.value.ending)
+            val title = "${vod.vodName} - ${episode.name} (${resolvedUrl.name})"
+            val effectiveStartPosition = if (_uiState.value.opening > 0L) maxOf(startPosition, _uiState.value.opening) else startPosition
+            players.play(
+                url = resolvedUrl.url,
+                headers = lastHeaders,
+                title = title,
+                startPosition = effectiveStartPosition,
+                format = lastFormat,
+            )
+            return
+        }
+
+        // 2. 若预解析仍在进行中（且为同一集），取消后台纯 UI 监听协程，直接等待并复用该预解析请求
         prefetchJob?.cancel()
+        prefetchJob = null
+        val request = getOrStartResolve(site, flag, episode, forceRefresh)
 
         playbackTracker.saveActiveSessionIfSucceeded(_uiState.value.opening, _uiState.value.ending)
         playbackTracker.clearSession()
@@ -504,21 +599,29 @@ class DetailViewModel @Inject constructor(
                     hasPreviousEpisode = hasPrev,
                     hasNextEpisode = hasNext,
                     isResolvingPlay = true,
+                    playUrls = if (isSameEpisode) it.playUrls else emptyList(),
+                    selectedPlayUrl = if (isSameEpisode) it.selectedPlayUrl else null,
                 )
             }
 
-            Timber.i("正在解析直链: site=${site.name}, flag=${flag.flag}, ep=${episode.name}")
-            val result = repository.resolvePlay(site, flag.flag, episode.url)
+            val result = try {
+                request.deferred.await()
+            } finally {
+                if (inFlightResolve === request && request.deferred.isCompleted) {
+                    inFlightResolve = null
+                }
+            }
 
-            val primaryPlayUrl = result.playUrls.firstOrNull { it.url == result.url }
+            val targetUrl = result.url.ifBlank { result.playUrls.firstOrNull()?.url.orEmpty() }
+            val primaryPlayUrl = result.playUrls.firstOrNull { it.url == targetUrl }
                 ?: result.playUrls.firstOrNull()
-                ?: PlayUrl("默认", result.url)
+                ?: PlayUrl("默认", targetUrl)
 
             _uiState.update {
                 it.copy(
                     isResolvingPlay = false,
-                    playUrls = result.playUrls,
-                    selectedPlayUrl = primaryPlayUrl,
+                    playUrls = if (result.needSniff) emptyList() else result.playUrls,
+                    selectedPlayUrl = if (result.needSniff) null else primaryPlayUrl,
                 )
             }
 
@@ -530,7 +633,7 @@ class DetailViewModel @Inject constructor(
                 players.reportError(msg, result.url)
                 return@launch
             }
-            if (result.url.isBlank()) {
+            if (targetUrl.isBlank()) {
                 val msg = result.msg.trim().ifBlank { "该线路解析链接为空，请尝试切换其它线路或换源" }
                 _uiState.update { it.copy(toastMessage = msg) }
                 AppToast.show(msg)
@@ -538,12 +641,12 @@ class DetailViewModel @Inject constructor(
                 return@launch
             }
 
-            if (Players.isIsoFormat(result.url, episode.name, result.format)) {
-                Timber.w("检测到 ISO 原盘镜像，拦截播放: site=${site.name}, flag=${flag.flag}, ep=${episode.name}, url=${result.url}")
+            if (Players.isIsoFormat(targetUrl, episode.name, result.format)) {
+                Timber.w("检测到 ISO 原盘镜像，拦截播放: site=${site.name}, flag=${flag.flag}, ep=${episode.name}, url=$targetUrl")
                 val msg = "检测到该资源为 ISO 原盘镜像，内置播放器暂不支持，请切换其它线路或格式"
                 _uiState.update { it.copy(toastMessage = msg) }
                 AppToast.show(msg)
-                players.reportError(msg, result.url)
+                players.reportError(msg, targetUrl)
                 return@launch
             }
 
@@ -551,11 +654,11 @@ class DetailViewModel @Inject constructor(
             lastFormat = result.format
             playbackTracker.createSession(site, vod, flag, episode, _uiState.value.opening, _uiState.value.ending)
 
-            val title = "${vod.vodName} - ${episode.name}"
+            val title = "${vod.vodName} - ${episode.name} (${primaryPlayUrl.name})"
             val op = _uiState.value.opening
             val effectiveStartPosition = if (op > 0L) maxOf(startPosition, op) else startPosition
             players.play(
-                url = result.url,
+                url = targetUrl,
                 headers = result.header,
                 title = title,
                 startPosition = effectiveStartPosition,
@@ -611,7 +714,7 @@ class DetailViewModel @Inject constructor(
         val isPlayerActive = players.state.value.playUrl.isNotEmpty() ||
             players.state.value.playbackState != PlaybackState.IDLE
         val shouldPlay = playImmediately || isPlayerActive
-        prefetchJob?.cancel()
+        cancelPrefetch()
         _uiState.update {
             it.copy(
                 selectedFlag = flag,
@@ -679,6 +782,7 @@ class DetailViewModel @Inject constructor(
 
     fun changeSource(newVod: Vod, shouldAutoPlay: Boolean = true) {
         playJob?.cancel()
+        cancelPrefetch()
         playbackTracker.saveActiveSessionIfSucceeded(_uiState.value.opening, _uiState.value.ending)
         playbackTracker.clearSession()
         players.stop()
@@ -936,7 +1040,7 @@ class DetailViewModel @Inject constructor(
         super.onCleared()
         detailJob?.cancel()
         playJob?.cancel()
-        prefetchJob?.cancel()
+        cancelPrefetch()
         sourceCoordinator.cancelAll()
         playbackTracker.handleCleared(_uiState.value.opening, _uiState.value.ending)
     }

@@ -1,12 +1,9 @@
 package com.mewbox.tv.ui.components
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -17,13 +14,11 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.itemsIndexed
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.SwapVert
@@ -52,14 +47,14 @@ import androidx.compose.material3.MaterialTheme
 
 /**
  * 选集面板样式（完全对齐 MewPlayer 播放页右侧选集面板 EpisodeListDialog）：
- * 近黑半透明底、白色粗体标题、半透明深灰细边胶囊按钮、文字分段标签（1-20 / 21-40）+ 按标题长度自适应列数的网格。
- * 选中项文字与边框变为主色（系统主色，不联动海报主题色），背景色保持不变。
+ * 近黑底、白色粗体标题、胶囊按钮、文字分段标签（1-20 / 21-40）+ 一集占一整行、纵向滚动的列表。
+ * 选中项按钮背景填主色、无描边、文字白色（主色由各抽屉注入：播放页蓝、详情页海报派生色）。
  *
  * 详情页（海报页）底部抽屉与全屏右侧面板共用这一套内容，只在外层决定容器形态。
  */
 
-/** 面板底色：MewPlayer shape_episode_panel_bg #E6101118 */
-val EpisodePanelColor = Color(0xE6101118)
+/** 播放页抽屉面板底色：半透明深灰（85% 不透明），透出背后的视频画面，参考芒果TV选集抽屉 */
+val EpisodePanelColor = Color(0xD9101118)
 
 /** 胶囊按钮：selector_player_panel_group_tab */
 internal val PillColor = Color(0x22FFFFFF)
@@ -76,8 +71,34 @@ internal val PanelTextMeta = Color(0x99FFFFFF)
 internal val PanelShape = RoundedCornerShape(6.dp)
 internal val PillShape = RoundedCornerShape(6.dp)
 
-/** 长标题阈值，与 MewPlayer EpisodeAdapter.LONG_TITLE_LENGTH 一致：到这一档就切成两行、两列。 */
-private const val LONG_TITLE_LENGTH = 12
+/**
+ * 选集内容配色。默认沿用播放页右侧抽屉的 Panel 半透明配色；
+ * 详情页底部抽屉可传入主题语义色，与 TMDB 抽屉视觉对齐。
+ */
+data class EpisodePickerColors(
+    val pill: Color,
+    val pillBorder: Color,
+    val textPrimary: Color,
+    val textMeta: Color,
+    val accent: Color,
+    /** 选中态底色；null = 用 accent 实底（详情页浅色抽屉的默认行为） */
+    val selectedBg: Color? = null,
+    /** 选中态文字色；null = 用白色（详情页浅色抽屉的默认行为） */
+    val selectedText: Color? = null,
+)
+
+/** 播放页右侧抽屉默认配色：选中态为半透明主色底 + 主色文字，参考芒果TV选集抽屉；不传 colors 即用此值 */
+val PanelPickerColors = EpisodePickerColors(
+    pill = PillColor,
+    pillBorder = PillBorderColor,
+    textPrimary = PanelTextPrimary,
+    textMeta = PanelTextMeta,
+    accent = PanelAccent,
+    selectedBg = PanelAccent.copy(alpha = 0.28f),
+    selectedText = PanelAccent,
+)
+
+/** 单集卡片高度：一集占一整行 */
 private const val EPISODE_ITEM_HEIGHT = 40
 
 /**
@@ -115,11 +136,10 @@ fun buildEpisodeGroups(size: Int, selectedIndex: Int, reversed: Boolean): List<E
 }
 
 /**
- * 选集面板内容：头部（选集 / 全N集 / 精简 / 倒序）+ 分段标签 + 可滚动网格。
+ * 选集面板内容：头部（选集 / 全N集 / 精简 / 倒序）+ 分段标签 + 一集一整行的可滚动列表。
  *
  * @param episodes 原始顺序的剧集列表
  * @param displayNames 与 episodes 同序的展示名（已按精简开关处理）
- * @param maxSpan 网格最大列数：详情页抽屉 4，全屏面板 5
  */
 @Composable
 fun EpisodePickerContent(
@@ -128,7 +148,6 @@ fun EpisodePickerContent(
     currentEpisode: Episode?,
     isReversed: Boolean,
     isCompact: Boolean,
-    maxSpan: Int,
     onToggleCompact: () -> Unit,
     onToggleReverse: () -> Unit,
     onSelectEpisode: (Episode) -> Unit,
@@ -136,6 +155,8 @@ fun EpisodePickerContent(
     /** 网格左右内边距：详情页抽屉 16dp，全屏面板随面板自身 12dp 内边距收进 */
     horizontalPadding: Dp = 16.dp,
     bottomPadding: Dp = 0.dp,
+    /** 配色：播放页抽屉用默认 Panel；详情页抽屉传入主题语义色以对齐 TMDB 抽屉 */
+    colors: EpisodePickerColors = PanelPickerColors,
 ) {
     val orderedEpisodes = remember(episodes, isReversed) {
         if (isReversed) episodes.asReversed() else episodes
@@ -150,10 +171,9 @@ fun EpisodePickerContent(
         buildEpisodeGroups(orderedEpisodes.size, selectedIndex, isReversed)
     }
 
-    val gridState = rememberLazyGridState()
+    val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
-    val maxNameLength = remember(orderedNames) { orderedNames.maxOfOrNull { it.length } ?: 0 }
-    val gridPadding = remember(horizontalPadding, bottomPadding) {
+    val listPadding = remember(horizontalPadding, bottomPadding) {
         PaddingValues(start = horizontalPadding, end = horizontalPadding, bottom = bottomPadding)
     }
 
@@ -164,50 +184,46 @@ fun EpisodePickerContent(
             isReversed = isReversed,
             onToggleCompact = onToggleCompact,
             onToggleReverse = onToggleReverse,
+            colors = colors,
         )
 
         if (groups.size > 1) {
             Spacer(Modifier.height(10.dp))
             EpisodeGroupTabs(
                 groups = groups,
-                gridState = gridState,
+                listState = listState,
                 horizontalPadding = horizontalPadding,
-                onSelect = { group -> scope.launch { gridState.scrollToItem(group.start) } },
+                onSelect = { group -> scope.launch { listState.scrollToItem(group.start) } },
+                colors = colors,
             )
         }
 
         Spacer(Modifier.height(10.dp))
 
-        BoxWithConstraints(modifier = Modifier.weight(1f)) {
-            val span = remember(maxNameLength, maxWidth, maxSpan) {
-                resolveSpan(maxNameLength, maxWidth, maxSpan)
-            }
+        // 打开时把当前集滚到列表上方（MewPlayer 留出约 1/3 视口，这里对齐到行首即可）
+        LaunchedEffect(selectedIndex) {
+            if (orderedEpisodes.isEmpty()) return@LaunchedEffect
+            listState.scrollToItem(selectedIndex)
+        }
 
-            // 打开时把当前集所在行滚到列表上方（MewPlayer 是留出约 1/3 视口，这里对齐到行首即可）
-            LaunchedEffect(selectedIndex, span) {
-                if (orderedEpisodes.isEmpty()) return@LaunchedEffect
-                gridState.scrollToItem(selectedIndex - selectedIndex % span)
-            }
-
-            LazyVerticalGrid(
-                state = gridState,
-                columns = GridCells.Fixed(span),
-                contentPadding = gridPadding,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                itemsIndexed(
-                    items = orderedEpisodes,
-                    key = { index, ep -> "picker_${ep.index}_${ep.name}_$index" },
-                ) { index, ep ->
-                    EpisodeGridCell(
-                        name = orderedNames.getOrElse(index) { ep.name },
-                        selected = ep == currentEpisode,
-                        multiLine = maxNameLength >= LONG_TITLE_LENGTH,
-                        onClick = { onSelectEpisode(ep) },
-                    )
-                }
+        LazyColumn(
+            state = listState,
+            contentPadding = listPadding,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+        ) {
+            itemsIndexed(
+                items = orderedEpisodes,
+                key = { index, ep -> "picker_${ep.index}_${ep.name}_$index" },
+            ) { index, ep ->
+                EpisodeGridCell(
+                    name = orderedNames.getOrElse(index) { ep.name },
+                    selected = ep == currentEpisode,
+                    onClick = { onSelectEpisode(ep) },
+                    colors = colors,
+                )
             }
         }
     }
@@ -222,19 +238,6 @@ fun EpisodePickerContent(
 fun rememberEpisodeDisplayNames(episodes: List<Episode>, compact: Boolean): List<String> =
     remember(episodes, compact) { EpisodeTitleCompact.displayNames(episodes, compact) }
 
-/** 按标题长度决定列数：纯集数可以密一点，长标题退回两列两行。 */
-private fun resolveSpan(maxNameLength: Int, availableWidth: Dp, maxSpan: Int): Int {
-    if (maxSpan <= 1) return 1
-    if (maxNameLength >= LONG_TITLE_LENGTH) return minOf(2, maxSpan)
-    val ideal = when {
-        maxNameLength >= 10 -> 130
-        maxNameLength >= 7 -> 104
-        else -> 80
-    }
-    val span = (availableWidth.value / ideal).toInt()
-    return span.coerceIn(2, maxSpan)
-}
-
 /** 头部：选集 + 全N集 + 精简 / 倒序（对齐 EpisodeListDialog 的 header） */
 @Composable
 private fun EpisodePickerHeader(
@@ -243,6 +246,7 @@ private fun EpisodePickerHeader(
     isReversed: Boolean,
     onToggleCompact: () -> Unit,
     onToggleReverse: () -> Unit,
+    colors: EpisodePickerColors,
 ) {
     Row(
         modifier = Modifier
@@ -252,13 +256,13 @@ private fun EpisodePickerHeader(
     ) {
         Text(
             text = "选集",
-            color = PanelTextPrimary,
+            color = colors.textPrimary,
             fontSize = 16.sp,
             fontWeight = FontWeight.Bold,
         )
         Text(
             text = "全${count}集",
-            color = PanelTextMeta,
+            color = colors.textMeta,
             fontSize = 12.sp,
             maxLines = 1,
             modifier = Modifier.padding(start = 8.dp),
@@ -268,6 +272,7 @@ private fun EpisodePickerHeader(
             text = "精简",
             selected = isCompact,
             onClick = onToggleCompact,
+            colors = colors,
         )
         Spacer(Modifier.width(5.dp))
         EpisodePickerPill(
@@ -275,23 +280,25 @@ private fun EpisodePickerHeader(
             selected = isReversed,
             icon = Icons.Default.SwapVert,
             onClick = onToggleReverse,
+            colors = colors,
         )
     }
 }
 
-/** 胶囊按钮：未选中半透明深灰细边，选中时文字与边框变为主色，背景色不变 */
+/** 胶囊按钮：未选中纯底色、文字主色；选中填主色底、文字白色（均无描边） */
 @Composable
 private fun EpisodePickerPill(
     text: String,
     selected: Boolean,
     onClick: () -> Unit,
     icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
+    colors: EpisodePickerColors,
 ) {
-    val accent = PanelAccent
+    val selectedBg = colors.selectedBg ?: colors.accent
+    val selectedText = colors.selectedText ?: Color.White
     Surface(
         shape = PillShape,
-        color = PillColor,
-        border = BorderStroke(1.dp, if (selected) accent else PillBorderColor),
+        color = if (selected) selectedBg else colors.pill,
         modifier = Modifier.clickable(onClick = onClick),
     ) {
         Row(
@@ -302,14 +309,14 @@ private fun EpisodePickerPill(
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
-                    tint = if (selected) accent else PanelTextPrimary,
+                    tint = if (selected) selectedText else colors.textPrimary,
                     modifier = Modifier.size(13.dp),
                 )
                 Spacer(Modifier.width(3.dp))
             }
             Text(
                 text = text,
-                color = if (selected) accent else PanelTextPrimary,
+                color = if (selected) selectedText else colors.textPrimary,
                 fontSize = 13.sp,
                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
                 maxLines = 1,
@@ -318,18 +325,20 @@ private fun EpisodePickerPill(
     }
 }
 
-/** 分段标签：与集数卡片同款胶囊，选中时文字与边框变为主色，背景色不变，随网格滚动自动切换 */
+/** 分段标签：与集数卡片同款胶囊，选中填主色底 + 白字，未选中纯底色无描边，随列表滚动自动切换 */
 @Composable
 private fun EpisodeGroupTabs(
     groups: List<EpisodeGroup>,
-    gridState: androidx.compose.foundation.lazy.grid.LazyGridState,
+    listState: LazyListState,
     horizontalPadding: Dp,
     onSelect: (EpisodeGroup) -> Unit,
+    colors: EpisodePickerColors,
 ) {
-    val accent = PanelAccent
+    val selectedBg = colors.selectedBg ?: colors.accent
+    val selectedText = colors.selectedText ?: Color.White
     // 滚到底时用最后一段，保证最后一段能被选中；未完成布局时 canScrollForward 也是 false，这里用 firstVisible 兜底
-    val firstVisible = gridState.firstVisibleItemIndex
-    val atEnd = !gridState.canScrollForward && firstVisible > 0
+    val firstVisible = listState.firstVisibleItemIndex
+    val atEnd = !listState.canScrollForward && firstVisible > 0
     val activeIndex = remember(groups, firstVisible, atEnd) {
         if (atEnd && groups.isNotEmpty()) {
             groups.lastIndex
@@ -349,8 +358,7 @@ private fun EpisodeGroupTabs(
             val selected = index == activeIndex
             Surface(
                 shape = PillShape,
-                color = PillColor,
-                border = BorderStroke(1.dp, if (selected) accent else PillBorderColor),
+                color = if (selected) selectedBg else colors.pill,
                 modifier = Modifier
                     .height(34.dp)
                     .clickable { onSelect(group) },
@@ -361,7 +369,7 @@ private fun EpisodeGroupTabs(
                 ) {
                     Text(
                         text = group.label,
-                        color = if (selected) accent else PanelTextPrimary,
+                        color = if (selected) selectedText else colors.textPrimary,
                         fontSize = 13.sp,
                         fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
                         maxLines = 1,
@@ -373,32 +381,32 @@ private fun EpisodeGroupTabs(
     }
 }
 
-/** 剧集卡片：40dp 高、6dp 圆角，选中时文字与边框变为主色，背景色不变（保持半透明深灰底） */
+/** 单集卡片：占一整行、40dp 高、6dp 圆角，选中填主色底、未选中纯底色，均无描边 */
 @Composable
 private fun EpisodeGridCell(
     name: String,
     selected: Boolean,
-    multiLine: Boolean,
     onClick: () -> Unit,
+    colors: EpisodePickerColors,
 ) {
-    val accent = PanelAccent
+    val selectedBg = colors.selectedBg ?: colors.accent
+    val selectedText = colors.selectedText ?: Color.White
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(EPISODE_ITEM_HEIGHT.dp)
             .clip(PanelShape)
-            .background(PillColor)
-            .border(1.dp, if (selected) accent else PillBorderColor, PanelShape)
+            .background(if (selected) selectedBg else colors.pill)
             .clickable(onClick = onClick)
             .padding(horizontal = 6.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text = name,
-            color = if (selected) accent else PanelTextPrimary,
+            color = if (selected) selectedText else colors.textPrimary,
             fontSize = 15.sp,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-            maxLines = if (multiLine) 2 else 1,
+            maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.Center,
             lineHeight = 18.sp,

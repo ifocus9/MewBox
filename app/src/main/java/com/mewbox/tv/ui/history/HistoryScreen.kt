@@ -23,6 +23,8 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -52,6 +54,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -87,6 +90,30 @@ fun HistoryScreen(
     var isDeleteMode by rememberSaveable { mutableStateOf(false) }
     // 0 = 播放记录（默认），1 = 豆瓣想看；rememberSaveable 保证切顶层 Tab 回来保持上次分段
     var segment by rememberSaveable { mutableIntStateOf(0) }
+    val pagerState = rememberPagerState(initialPage = segment, pageCount = { 2 })
+    var isProgrammaticScroll by remember { mutableStateOf(false) }
+
+    // 点击分段胶囊时同步平滑滑动到对应页
+    LaunchedEffect(segment) {
+        if (pagerState.currentPage != segment) {
+            isProgrammaticScroll = true
+            try {
+                pagerState.animateScrollToPage(segment)
+            } finally {
+                isProgrammaticScroll = false
+            }
+        }
+    }
+
+    // 左右滑动页面时同步更新分段选中态
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerState.currentPage }
+            .collect { page ->
+                if (!isProgrammaticScroll && page != segment) {
+                    segment = page
+                }
+            }
+    }
 
     // 当列表为空时自动退出删除模式
     LaunchedEffect(state.items.isEmpty()) {
@@ -210,51 +237,55 @@ fun HistoryScreen(
                     }
                 }
 
-                if (segment == 1 && !isDeleteMode) {
-                    WishTab(
-                        onNavigateToSearch = onNavigateToSearch,
-                        modifier = Modifier.weight(1f),
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .weight(1f),
-                    ) {
-                        when {
-                            state.isLoading -> {
-                                LoadingState(text = "正在获取观看历史...")
-                            }
-                            state.items.isEmpty() -> {
-                                EmptyState(message = "暂无记录")
-                            }
-                            else -> {
-                                LazyColumn(
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 150.dp),
-                                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                                ) {
-                                    items(state.items, key = { it.key }) { history ->
-                                        HistoryItemCard(
-                                            history = history,
-                                            isDeleteMode = isDeleteMode,
-                                            onClick = {
-                                                if (isDeleteMode) {
+                HorizontalPager(
+                    state = pagerState,
+                    userScrollEnabled = !isDeleteMode,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                ) { page ->
+                    if (page == 1 && !isDeleteMode) {
+                        WishTab(
+                            onNavigateToSearch = onNavigateToSearch,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    } else {
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            when {
+                                state.isLoading -> {
+                                    LoadingState(text = "正在获取观看历史...")
+                                }
+                                state.items.isEmpty() -> {
+                                    EmptyState(message = "暂无记录")
+                                }
+                                else -> {
+                                    LazyColumn(
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 150.dp),
+                                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                                    ) {
+                                        items(state.items, key = { it.key }) { history ->
+                                            HistoryItemCard(
+                                                history = history,
+                                                isDeleteMode = isDeleteMode,
+                                                onClick = {
+                                                    if (isDeleteMode) {
+                                                        viewModel.deleteHistory(history.key)
+                                                    } else {
+                                                        onNavigateToPlay(history.siteKey, history.vodId, history.vodName, history.vodPic)
+                                                    }
+                                                },
+                                                onLongClick = {
+                                                    if (!isDeleteMode) {
+                                                        isDeleteMode = true
+                                                    }
+                                                },
+                                                onDeleteClick = {
                                                     viewModel.deleteHistory(history.key)
-                                                } else {
-                                                    onNavigateToPlay(history.siteKey, history.vodId, history.vodName, history.vodPic)
-                                                }
-                                            },
-                                            onLongClick = {
-                                                if (!isDeleteMode) {
-                                                    isDeleteMode = true
-                                                }
-                                            },
-                                            onDeleteClick = {
-                                                viewModel.deleteHistory(history.key)
-                                            },
-                                            modifier = Modifier.animateItem(),
-                                        )
+                                                },
+                                                modifier = Modifier.animateItem(),
+                                            )
+                                        }
                                     }
                                 }
                             }

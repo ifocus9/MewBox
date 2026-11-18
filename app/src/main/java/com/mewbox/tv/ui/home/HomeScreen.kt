@@ -1,12 +1,6 @@
 package com.mewbox.tv.ui.home
 
 import com.mewbox.tv.util.AppToast
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -24,8 +18,9 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.ContainedLoadingIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -40,6 +35,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -80,14 +76,20 @@ fun HomeScreen(
 
     val scope = rememberCoroutineScope()
     val tabListState = rememberLazyListState()
+    val pagerState = rememberPagerState(pageCount = { state.classes.size })
+    var isProgrammaticScroll by remember { mutableStateOf(false) }
 
     // 为每个分类维护独立的 LazyGridState，避免转场并发使用同一个 gridState 产生冲突，并保留返回原分类时的滚动位置
     val gridStates = remember { mutableMapOf<String, LazyGridState>() }
     val currentGridState = gridStates.getOrPut(state.selectedClassId) { LazyGridState() }
 
-    // 关键优化：当首页网格或横向分类条处于滑动状态时，通知外部暂停高负荷 Shader 图层渲染
-    val isScrolling by remember(currentGridState) {
-        derivedStateOf { currentGridState.isScrollInProgress || tabListState.isScrollInProgress }
+    // 关键优化：当首页网格、横向分类条或分类 Pager 处于滑动状态时，通知外部暂停高负荷 Shader 图层渲染
+    val isScrolling by remember(currentGridState, pagerState) {
+        derivedStateOf {
+            currentGridState.isScrollInProgress ||
+                tabListState.isScrollInProgress ||
+                pagerState.isScrollInProgress
+        }
     }
     LaunchedEffect(isScrolling) {
         onScrollInProgressChange?.invoke(isScrolling)
@@ -131,6 +133,40 @@ fun HomeScreen(
             AppToast.show(msg)
             viewModel.consumeMessage()
         }
+    }
+
+    // 选中分类变化时同步 HorizontalPager 到对应页（点击分类 Tab 或站点切换触发）
+    var lastSiteKey by remember { mutableStateOf(state.currentSite?.key) }
+    LaunchedEffect(state.selectedClassId, state.classes) {
+        val targetIndex = state.classes.indexOfFirst { it.typeId == state.selectedClassId }
+        if (targetIndex < 0) return@LaunchedEffect
+        val siteChanged = lastSiteKey != state.currentSite?.key
+        lastSiteKey = state.currentSite?.key
+        if (pagerState.currentPage != targetIndex) {
+            isProgrammaticScroll = true
+            try {
+                if (siteChanged) {
+                    pagerState.scrollToPage(targetIndex)
+                } else {
+                    pagerState.animateScrollToPage(targetIndex)
+                }
+            } finally {
+                isProgrammaticScroll = false
+            }
+        }
+    }
+
+    // 横向滑动切换分类页时同步通知 ViewModel 切换当前选中分类
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerState.currentPage }
+            .collect { page ->
+                if (!isProgrammaticScroll) {
+                    val classId = state.classes.getOrNull(page)?.typeId
+                    if (classId != null && classId != state.selectedClassId) {
+                        viewModel.selectClass(classId)
+                    }
+                }
+            }
     }
 
     // 选中分类时横向 Tab 仅在选中项完全不可见时才平滑滚动
@@ -207,25 +243,22 @@ fun HomeScreen(
                 onFilterClick = { showFilterSheet = true },
             )
 
-            // 3. 当前分类下的主体内容展示区与网格（支持下拉刷新与平滑分类切换动画）
+            // 3. 当前分类下的主体内容展示区与网格（支持下拉刷新与横向滑动切换分类）
             Box(modifier = Modifier.weight(1f)) {
                 PullToRefreshBox(
                     isRefreshing = state.isRefreshing,
                     onRefresh = { viewModel.pullRefresh() },
                     modifier = Modifier.fillMaxSize(),
                 ) {
-                    AnimatedContent(
-                        targetState = state.selectedClassId,
-                        transitionSpec = {
-                            fadeIn(
-                                animationSpec = tween(180, easing = FastOutSlowInEasing),
-                            ) togetherWith fadeOut(
-                                animationSpec = tween(120, easing = FastOutSlowInEasing),
-                            )
+                    HorizontalPager(
+                        state = pagerState,
+                        key = { page ->
+                            val id = state.classes.getOrNull(page)?.typeId
+                            if (id != null) "${state.currentSite?.key}_$id" else page
                         },
-                        label = "HomeVodGridTransition",
                         modifier = Modifier.fillMaxSize(),
-                    ) { targetClassId ->
+                    ) { page ->
+                        val targetClassId = state.classes.getOrNull(page)?.typeId ?: return@HorizontalPager
                         val isCurrent = targetClassId == state.selectedClassId
                         val categoryItems = if (isCurrent) {
                             state.items
@@ -235,7 +268,7 @@ fun HomeScreen(
                         val gridStateForTab = gridStates.getOrPut(targetClassId) { LazyGridState() }
 
                         when {
-                            isCurrent && state.isLoading && categoryItems.isEmpty() -> {
+                            (!isCurrent && categoryItems.isEmpty()) || (isCurrent && state.isLoading && categoryItems.isEmpty()) -> {
                                 VodGridSkeletonGroup()
                             }
                             isCurrent && state.error != null && categoryItems.isEmpty() -> {
@@ -244,7 +277,7 @@ fun HomeScreen(
                                     onRetry = { viewModel.refresh() },
                                 )
                             }
-                            categoryItems.isEmpty() && (!isCurrent || !state.isLoading) -> {
+                            isCurrent && categoryItems.isEmpty() && !state.isLoading -> {
                                 EmptyState(message = "暂无数据")
                             }
                             else -> {

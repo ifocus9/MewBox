@@ -1,70 +1,39 @@
 package com.mewbox.tv.ui.setting
 
-import android.Manifest
 import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
-import android.os.Environment
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
-import android.provider.Settings
-import androidx.activity.result.ActivityResultLauncher
-import androidx.core.content.ContextCompat
+import androidx.activity.result.contract.ActivityResultContracts
 import timber.log.Timber
 import java.io.File
 
 /**
- * 本地文件选择与存储权限管理工具。
- * 遵循现代 Android 存储规范，并兼容 Android 11+ 的 MANAGE_EXTERNAL_STORAGE。
+ * 本地文件选择器辅助工具：
+ * 仅依赖系统 SAF（Storage Access Framework）直读选中文档流，无需任何外部存储权限。
  */
 object FilePickerHelper {
 
-    /** 检查是否已拥有读取本地文件权限。 */
-    fun hasStoragePermission(context: Context): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            Environment.isExternalStorageManager()
-        } else {
-            ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.READ_EXTERNAL_STORAGE,
-            ) == PackageManager.PERMISSION_GRANTED
-        }
-    }
-
-    /**
-     * 发起权限请求：
-     * - Android 11+ (API 30+)：跳转至“所有文件访问权限”系统设置页；
-     * - Android 10 及以下：通过运行时权限请求 READ_EXTERNAL_STORAGE。
-     */
-    fun requestStoragePermission(
-        context: Context,
-        manageLauncher: ActivityResultLauncher<Intent>,
-        permissionsLauncher: ActivityResultLauncher<Array<String>>,
-    ) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            try {
-                val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
-                    data = Uri.parse("package:${context.packageName}")
+    /** 面向所有文档类型的系统 SAF 选择契约，默认尝试定位到主内部存储根目录。 */
+    class OpenStorageDocument : ActivityResultContracts.OpenDocument() {
+        override fun createIntent(context: Context, input: Array<String>): Intent {
+            return super.createIntent(context, input).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    putExtra(
+                        DocumentsContract.EXTRA_INITIAL_URI,
+                        Uri.parse("content://com.android.externalstorage.documents/root/primary"),
+                    )
                 }
-                manageLauncher.launch(intent)
-            } catch (_: Exception) {
-                val fallbackIntent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
-                manageLauncher.launch(fallbackIntent)
             }
-        } else {
-            permissionsLauncher.launch(
-                arrayOf(
-                    Manifest.permission.READ_EXTERNAL_STORAGE,
-                    Manifest.permission.WRITE_EXTERNAL_STORAGE,
-                ),
-            )
         }
     }
 
-    /** 从 Content Uri 或最后路径段中提取文件名。 */
+    /** 提取 SAF Uri 对应的用户可读文件名。 */
     fun getFileName(context: Context, uri: Uri): String {
         var name = ""
         if (uri.scheme.equals(ContentResolver.SCHEME_CONTENT, ignoreCase = true)) {
@@ -84,77 +53,25 @@ object FilePickerHelper {
         }
         if (name.isBlank()) {
             name = uri.lastPathSegment.orEmpty()
+                .substringAfterLast('/')
+                .substringAfterLast(':')
         }
-        return name
+        return name.trim()
     }
 
-    /**
-     * 将选中的 Uri 解析为持久可访问的本地路径：
-     * 1. 优先解析为物理绝对路径并以 "file://" 形式返回；
-     * 2. 若无法直接访问物理路径，则将其流复制至应用私有 subscriptions 目录并返回其 "file://" 路径。
-     */
-    fun resolveLocalFilePath(context: Context, uri: Uri): String {
-        // 1. 尝试解析为物理绝对路径
-        val realPath = getRealPathFromUri(context, uri)
-        if (!realPath.isNullOrBlank()) {
-            val file = File(realPath)
-            if (file.exists() && file.canRead()) {
-                return "file://${file.absolutePath}"
-            }
+    /** 判断配置地址是否指向应用托管的内部本地订阅（编辑弹窗据此隐藏底层私有路径）。 */
+    fun isInternalLocalConfigUrl(context: Context, url: String): Boolean {
+        val trimmed = url.trim()
+        if (trimmed.isEmpty()) return false
+        if (trimmed.startsWith("local://", ignoreCase = true)) return true
+        if (!trimmed.startsWith("file://", ignoreCase = true)) return false
+        val path = Uri.parse(trimmed).path ?: return false
+        val fileCanonical = runCatching { File(path).canonicalPath }.getOrNull() ?: return false
+        val managedDirs = listOf("local_html", "local_configs", "subscriptions")
+        return managedDirs.any { dirName ->
+            val dirCanonical = runCatching { File(context.filesDir, dirName).canonicalPath }.getOrNull()
+                ?: return@any false
+            fileCanonical == dirCanonical || fileCanonical.startsWith("$dirCanonical${File.separator}")
         }
-
-        // 2. 无法直接物理访问或位于虚拟卷：复制至应用私有 subscriptions 目录
-        return try {
-            val rawName = getFileName(context, uri)
-            val mimeType = context.contentResolver.getType(uri).orEmpty()
-            val ext = when {
-                rawName.contains(".") -> ""
-                mimeType.contains("html", ignoreCase = true) -> ".html"
-                mimeType.contains("zip", ignoreCase = true) -> ".zip"
-                else -> ".json"
-            }
-            val fileName = rawName.ifBlank { "subscription_${System.currentTimeMillis()}" } + ext
-            val dir = File(context.filesDir, "subscriptions").apply { if (!exists()) mkdirs() }
-            val targetFile = File(dir, fileName)
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                targetFile.outputStream().use { output ->
-                    input.copyTo(output)
-                }
-            }
-            "file://${targetFile.absolutePath}"
-        } catch (e: Exception) {
-            Timber.e(e, "复制本地文件失败: %s", uri)
-            // 兜底返回 Uri 字符串
-            uri.toString()
-        }
-    }
-
-    private fun getRealPathFromUri(context: Context, uri: Uri): String? {
-        if (DocumentsContract.isDocumentUri(context, uri)) {
-            val docId = DocumentsContract.getDocumentId(uri)
-            if ("com.android.externalstorage.documents" == uri.authority) {
-                val split = docId.split(":")
-                val type = split.getOrNull(0).orEmpty()
-                if (type.equals("primary", ignoreCase = true)) {
-                    val rel = if (split.size > 1) split[1] else ""
-                    return "${Environment.getExternalStorageDirectory()}/$rel"
-                } else {
-                    return "/storage/${docId.replace(":", "/")}"
-                }
-            } else if ("com.android.providers.downloads.documents" == uri.authority) {
-                if (docId.startsWith("raw:")) {
-                    return docId.removePrefix("raw:")
-                }
-                val fileName = getFileName(context, uri)
-                if (fileName.isNotBlank()) {
-                    val dlFile = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), fileName)
-                    if (dlFile.exists()) return dlFile.absolutePath
-                }
-            }
-        } else if (ContentResolver.SCHEME_FILE.equals(uri.scheme, ignoreCase = true)) {
-            return uri.path
-        }
-        return null
     }
 }
-

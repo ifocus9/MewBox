@@ -546,6 +546,7 @@ private fun MainTabScreen(
                 HorizontalPager(
                     state = pagerState,
                     beyondViewportPageCount = 2,
+                    userScrollEnabled = false,
                     modifier = Modifier.fillMaxSize(),
                 ) { page ->
                     when (Tab.entries[page]) {
@@ -802,7 +803,6 @@ private fun MewFloatingSearchButton(
         ),
         modifier = modifier
             .size(NavMetrics.BAR_CROSS_DP.dp)
-            .clip(CircleShape)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -812,6 +812,8 @@ private fun MewFloatingSearchButton(
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                // clip 必须放在 Surface 内部：挂在外层 modifier 上会裁掉 Surface 的 elevation 投影
+                .clip(CircleShape)
                 .background(
                     Brush.verticalGradient(
                         0f to Color.White.copy(alpha = 0.4f),

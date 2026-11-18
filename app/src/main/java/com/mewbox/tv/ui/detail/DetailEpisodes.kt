@@ -1,5 +1,10 @@
 package com.mewbox.tv.ui.detail
 
+import com.mewbox.tv.ui.components.EpisodePickerColors
+import com.mewbox.tv.ui.components.MewOverlayVariant
+import com.mewbox.tv.ui.components.MewSheetShell
+import com.mewbox.tv.ui.components.OverlayTokens
+
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -47,7 +52,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.mewbox.tv.bean.Episode
-import com.mewbox.tv.ui.components.EpisodePanelColor
 import com.mewbox.tv.ui.components.EpisodePickerContent
 import com.mewbox.tv.ui.components.rememberEpisodeDisplayNames
 
@@ -243,35 +247,34 @@ private fun EpisodeSheet(
     onSelect: (Episode) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = EpisodePanelColor,
-        contentColor = Color.White,
-        // MewPlayer 抽屉顶部 16dp 圆角
-        shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
-        dragHandle = {
-            BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.35f))
-        },
-    ) {
+    MewSheetShell(
+        onDismiss = onDismiss,
+        // 与 TMDB 抽屉同为 Light：跟随详情页主题 surface 背景、onSurface 内容色
+        variant = MewOverlayVariant.Light,
+    ) { focusModifier ->
         EpisodePickerContent(
             episodes = episodes,
             displayNames = displayNames,
             currentEpisode = selectedEpisode,
             isReversed = isReversed,
             isCompact = isCompactEpisodeTitle,
-            maxSpan = 4,
             onToggleCompact = onToggleCompact,
             onToggleReverse = onToggleReverse,
             onSelectEpisode = onSelect,
             horizontalPadding = 0.dp,
             bottomPadding = 20.dp,
-            modifier = Modifier
+            modifier = focusModifier
                 .fillMaxWidth()
                 .fillMaxHeight(0.7f)
                 .padding(horizontal = 16.dp),
+            // 对齐 TMDB 抽屉的 M3 语义色：胶囊底 surfaceContainerHighest、选中色随主题 primary（海报派生色）
+            colors = EpisodePickerColors(
+                pill = MaterialTheme.colorScheme.surfaceContainerHighest,
+                pillBorder = MaterialTheme.colorScheme.outlineVariant,
+                textPrimary = MaterialTheme.colorScheme.onSurface,
+                textMeta = MaterialTheme.colorScheme.onSurfaceVariant,
+                accent = MaterialTheme.colorScheme.primary,
+            ),
         )
     }
 }

@@ -1,5 +1,7 @@
 package com.mewbox.tv.ui.web.fm
 
+import com.mewbox.tv.ui.components.MewOverlayBackHandler
+
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
@@ -86,8 +88,8 @@ fun HtmlSideFloatingBar(
         }
     }
 
-    // 展开状态下拦截返回键优先收起悬浮条
-    BackHandler(enabled = expanded) {
+    // 展开状态下拦截返回键优先收起悬浮条（与弹层共用返回键契约）
+    MewOverlayBackHandler(enabled = expanded) {
         expanded = false
     }
 

@@ -1,5 +1,9 @@
 package com.mewbox.tv.ui.detail
 
+import com.mewbox.tv.ui.components.MewOverlayVariant
+import com.mewbox.tv.ui.components.MewSheetShell
+import com.mewbox.tv.ui.components.OverlayTokens
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -80,20 +84,18 @@ fun TmdbRematchDialog(
     onSelect: (TmdbMedia) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var keyword by remember(initialKeyword) { mutableStateOf(initialKeyword) }
     val keyboardController = LocalSoftwareKeyboardController.current
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-    ) {
+    MewSheetShell(
+        onDismiss = onDismiss,
+        variant = MewOverlayVariant.Light,
+    ) { focusModifier ->
         Column(
-            modifier = Modifier
+            modifier = focusModifier
                 .fillMaxWidth()
-                .fillMaxHeight(0.80f)
-                .padding(horizontal = 20.dp),
+                .fillMaxHeight(OverlayTokens.SheetMaxHeightFraction)
+                .padding(horizontal = OverlayTokens.Padding),
         ) {
             // 1. 标题行
             Row(

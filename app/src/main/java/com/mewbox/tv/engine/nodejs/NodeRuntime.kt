@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.withContext
 import timber.log.Timber
+import java.io.InputStream
 import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -43,33 +44,24 @@ class NodeRuntime @Inject constructor(
         return if (hasCachedBundle(source)) "Node.js 服务启动中…" else "Node.js 下载中…"
     }
 
-    /** 本地是否已有校验过的资源包（纯本地判断，不触发任何网络请求） */
-    fun hasCachedBundle(source: String? = null): Boolean {
-        return client.hasCachedBundle(source)
-    }
+    fun hasCachedBundle(source: String? = null): Boolean = client.hasCachedBundle(source)
 
     private val _loading = MutableStateFlow<String?>(
         if (isConfig(settings.currentConfigUrl)) {
             initialText(settings.currentConfigUrl)
         } else {
             null
-        }
+        },
     )
 
-    /**
-     * 当前加载进度文案，null 表示没有加载。
-     * 整个加载过程（下载 → 启动）只复用一个全局 loading，靠原地换文案避免提示闪动。
-     */
     val loading: StateFlow<String?> = _loading.asStateFlow()
 
-    /**
-     * 终态结果流（成功 / 失败），由 MainActivity 统一收集后弹 Toast。
-     * 首页与设置页同处一个 Pager 内同时存活，集中消费可避免重复提示。
-     */
     private val resultChannel = Channel<NodeBootEvent>(Channel.BUFFERED)
     val results: Flow<NodeBootEvent> = resultChannel.receiveAsFlow()
 
     fun isConfig(url: String): Boolean = NodeBundle.isConfig(url)
+
+    fun isLocalNodeSource(url: String): Boolean = NodeBundle.isLocalNodeSource(url)
 
     fun isRunning(): Boolean = client.isRunning()
 
@@ -78,11 +70,8 @@ class NodeRuntime @Inject constructor(
         notify: Boolean = true,
         showLoading: Boolean = true,
     ): Boolean = withContext(Dispatchers.IO) {
-        // 已经在跑（例如进程存活时重复进入 App）无需再打扰用户
         if (client.isRunning()) return@withContext true
-        // 静默预热等不展示 loading 的调用不能递增批次号，避免打断并发前台加载任务的收尾清理
         val id = if (showLoading) sequence.incrementAndGet() else 0
-        // 有缓存也要先给出 loading，避免“没反应”的错觉
         if (showLoading) {
             setLoading(id, initialText(source))
         }
@@ -110,8 +99,7 @@ class NodeRuntime @Inject constructor(
 
     /**
      * 切回前台或必要时的静默预热：
-     * 在当前订阅源为 Node 或本地已存在 Node 缓存包（例如前端处于 HTML 网页源但底层需复用 Node 推送源）且服务未运行时在后台拉起，
-     * 不弹出阻断 UI 的遮罩浮层，不弹通知提示。
+     * 在当前订阅源为 Node 或本地已存在 Node 缓存包时后台拉起，不弹出遮罩与通知。
      */
     suspend fun warmUpIfNecessary(): Boolean = withContext(Dispatchers.IO) {
         if (client.isRunning()) return@withContext true
@@ -130,9 +118,6 @@ class NodeRuntime @Inject constructor(
         }
     }
 
-    /**
-     * 静默拉起本地或指定 Node 服务并读取其 `/config` 转换后的站点配置 JSON。
-     */
     suspend fun fetchConfigJson(source: String? = null): String? = withContext(Dispatchers.IO) {
         try {
             val started = ensureStarted(source = source, notify = false, showLoading = false)
@@ -144,12 +129,13 @@ class NodeRuntime @Inject constructor(
         }
     }
 
-    suspend fun loadConfig(source: String): String = withContext(Dispatchers.IO) {
+    suspend fun loadConfig(source: String): String = loadConfigResult(source).configJson
+
+    suspend fun loadConfigResult(source: String): NodeClient.LoadResult = withContext(Dispatchers.IO) {
         val id = sequence.incrementAndGet()
         setLoading(id, initialText(source))
         try {
-            // 切订阅的最终结果由调用方（设置页 / 首页）给一条提示，这里不再重复发
-            client.load(source) { stage -> onStage(id, stage) }
+            client.loadWithResult(source) { stage -> onStage(id, stage) }
         } catch (e: Exception) {
             if (!NodeClient.isInterrupted(e)) Timber.w(e, "Node.js 运行时启动失败")
             throw e
@@ -158,25 +144,31 @@ class NodeRuntime @Inject constructor(
         }
     }
 
-    fun accept() {
-        client.accept()
+    suspend fun loadFromStream(
+        localSourceUrl: String,
+        streamOpener: () -> InputStream,
+    ): NodeClient.LoadResult = withContext(Dispatchers.IO) {
+        val id = sequence.incrementAndGet()
+        setLoading(id, "Node.js 资源解压启动中…")
+        try {
+            client.loadFromStream(localSourceUrl, streamOpener) { stage -> onStage(id, stage) }
+        } catch (e: Exception) {
+            if (!NodeClient.isInterrupted(e)) Timber.w(e, "本地 Node.js 压缩包启动失败")
+            throw e
+        } finally {
+            clearLoading(id)
+        }
     }
 
-    fun clear() {
-        client.clear()
-    }
+    fun accept() = client.accept()
 
-    /** 强制清除 loading 状态（用于异常中断或容错分支） */
+    fun clear() = client.clear()
+
     fun clearLoadingForce() {
         sequence.incrementAndGet()
         _loading.value = null
     }
 
-    /**
-     * 用户手动打断加载：取消远端订阅下载与加载请求，并立即清掉 loading 浮层。
-     * 后台任务会在下一个取消检查点抛 InterruptedIOException 收尾（sequence 已 bump，不会再复活浮层）。
-     * 场景：远端订阅源卡住时，返回键打断后可切换其他订阅源。
-     */
     fun cancelLoading() {
         clearLoadingForce()
         client.cancelLoad()
@@ -202,14 +194,12 @@ class NodeRuntime @Inject constructor(
     }
 
     private fun reportFailure(error: Throwable) {
-        // 切换订阅/主动取消造成的打断不算失败，静默忽略
         if (NodeClient.isInterrupted(error)) return
         Timber.w(error, "Node.js 运行时启动失败")
         notifyResult(NodeBootStage.FAILED, "启动失败：${describe(error)}")
     }
 
     companion object {
-        /** 把常见底层异常翻成中文提示，未命中的保留原文并做长度截断（UI 侧提示也复用这段文案） */
         fun describe(error: Throwable): String {
             val raw = error.message?.takeIf { it.isNotBlank() } ?: return error.javaClass.simpleName
             val text = when {
@@ -218,7 +208,7 @@ class NodeRuntime @Inject constructor(
                 raw.contains("Node bundle loading canceled") -> "已手动取消"
                 raw.contains("Unable to bind Node service") -> "无法绑定 Node 服务"
                 raw.contains("Node server did not report an address") -> "Node 服务未返回监听地址"
-                raw.contains("Node config must end with index.js.md5") -> "订阅地址必须以 index.js.md5 或 .zip 结尾"
+                raw.contains("Node config must end with") -> "订阅地址必须以 index.js.md5、index.js 或 .zip 结尾"
                 raw.contains("压缩包内缺少 index.js") -> "压缩包内缺少 index.js"
                 raw.contains("压缩包内缺少 index.config.js") -> "压缩包内缺少 index.config.js"
                 raw.contains("Node zip bundle exceeds size limit") -> "压缩包解压体积超出限制"
@@ -230,6 +220,7 @@ class NodeRuntime @Inject constructor(
                 raw.contains("Signed Node bundle cannot downgrade to unsigned") -> "签名校验不通过"
                 raw.contains("MD5 mismatch") -> "资源包 MD5 校验失败"
                 raw.contains("Node runtime is not running") -> "Node 服务未运行"
+                raw.contains("returned no active sites") -> "节点服务未返回有效站点"
                 raw.startsWith("Download failed HTTP") -> raw.replaceFirst("Download failed HTTP", "下载失败 HTTP")
                 raw.startsWith("HTTP ") -> raw.replace(" for ", " 地址：")
                 else -> raw

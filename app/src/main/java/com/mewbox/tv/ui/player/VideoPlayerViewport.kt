@@ -8,6 +8,9 @@ import android.util.TypedValue
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -39,6 +42,7 @@ import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.SubtitleView
 import coil3.compose.AsyncImage
+import com.mewbox.tv.bean.PlayUrl
 import com.mewbox.tv.bean.Vod
 import com.mewbox.tv.player.PlaybackState
 import com.mewbox.tv.player.PlayerState
@@ -114,7 +118,9 @@ fun VideoPlayerViewport(
     currentEpisodeName: String,
     hasPrevEpisode: Boolean,
     hasNextEpisode: Boolean,
-    hasMultiQuality: Boolean = false,
+    playUrls: List<PlayUrl> = emptyList(),
+    selectedPlayUrl: PlayUrl? = null,
+    onSelectPlayUrl: (PlayUrl) -> Unit = {},
     isResolvingPlay: Boolean,
     isAutoSearching: Boolean,
     autoSearchMessage: String?,
@@ -143,7 +149,12 @@ fun VideoPlayerViewport(
     var showControls by remember { mutableStateOf(false) }
     var isLocked by remember { mutableStateOf(false) }
     var showInfoDialog by remember { mutableStateOf(false) }
-    var activeTrackType by remember { mutableStateOf<Int?>(null) }
+    var showQualityDialog by remember { mutableStateOf(false) }
+    // 轨道抽屉拆成显隐 + 类型两个状态：退出动画期间类型需保活，否则内容被提前移除
+    var showTrackDrawer by remember { mutableStateOf(false) }
+    var trackDrawerType by remember { mutableStateOf(C.TRACK_TYPE_TEXT) }
+    val hasMultiQuality = playUrls.size > 1 || (playUrls.size == 1 && playUrls.first().name != "默认")
+    val currentQualityName = selectedPlayUrl?.name?.takeIf { it.isNotBlank() && it != "默认" } ?: "画质"
 
     var isSeekingByGesture by remember { mutableStateOf(false) }
     var gestureSeekTargetMs by remember { mutableLongStateOf(0L) }
@@ -493,6 +504,7 @@ fun VideoPlayerViewport(
             hasPrevEpisode = hasPrevEpisode,
             hasNextEpisode = hasNextEpisode,
             hasMultiQuality = hasMultiQuality,
+            currentQualityName = currentQualityName,
             onBack = onBack,
             onShowMediaInfo = { showInfoDialog = true },
             onPlayPauseToggle = onPlayPauseToggle,
@@ -500,9 +512,10 @@ fun VideoPlayerViewport(
             onPlayPrevious = onPlayPrevious,
             onPlayNext = onPlayNext,
             onRefreshPlayback = onRefreshPlayback,
-            onShowSubtitleTracks = { activeTrackType = C.TRACK_TYPE_TEXT },
-            onShowAudioTracks = { activeTrackType = C.TRACK_TYPE_AUDIO },
-            onShowVideoTracks = { activeTrackType = C.TRACK_TYPE_VIDEO },
+            onShowSubtitleTracks = { trackDrawerType = C.TRACK_TYPE_TEXT; showTrackDrawer = true },
+            onShowAudioTracks = { trackDrawerType = C.TRACK_TYPE_AUDIO; showTrackDrawer = true },
+            onShowVideoTracks = { trackDrawerType = C.TRACK_TYPE_VIDEO; showTrackDrawer = true },
+            onShowQuality = { showQualityDialog = true },
             onLockScreen = { isLocked = true },
             onOpenEpisodeDrawer = onOpenEpisodeDrawer,
             opening = opening,
@@ -525,7 +538,29 @@ fun VideoPlayerViewport(
         )
     }
 
-    activeTrackType?.let { type ->
+    // 画质抽屉：与选集/轨道抽屉同款右侧滑入动画
+    AnimatedVisibility(
+        visible = showQualityDialog,
+        enter = slideInHorizontally(initialOffsetX = { it }),
+        exit = slideOutHorizontally(targetOffsetX = { it }),
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        QualitySelectionDialog(
+            playUrls = playUrls,
+            selectedPlayUrl = selectedPlayUrl,
+            onSelectPlayUrl = onSelectPlayUrl,
+            onDismiss = { showQualityDialog = false },
+        )
+    }
+
+    // 轨道抽屉：与选集抽屉同款右侧滑入动画；退出期间 trackDrawerType 保活
+    AnimatedVisibility(
+        visible = showTrackDrawer,
+        enter = slideInHorizontally(initialOffsetX = { it }),
+        exit = slideOutHorizontally(targetOffsetX = { it }),
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        val type = trackDrawerType
         val tracks = when (type) {
             C.TRACK_TYPE_TEXT -> playerState.subtitleTracks
             C.TRACK_TYPE_AUDIO -> playerState.audioTracks
@@ -552,7 +587,7 @@ fun VideoPlayerViewport(
                 onResetToDefault(type)
                 AppToast.show("已恢复系统自适应")
             },
-            onDismiss = { activeTrackType = null },
+            onDismiss = { showTrackDrawer = false },
         )
     }
 }

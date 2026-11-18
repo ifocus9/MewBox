@@ -1,36 +1,13 @@
 package com.fongmi.nodejs
 
-import android.content.ComponentName
 import android.content.Context
-import android.content.Intent
-import android.content.ServiceConnection
-import android.os.IBinder
-import android.os.RemoteException
 import com.mewbox.tv.api.net.LocalMessageBridge
-import java.io.ByteArrayOutputStream
-import java.io.File
-import java.io.IOException
-import java.io.InterruptedIOException
-import java.net.Proxy
-import java.net.SocketTimeoutException
-import java.nio.charset.StandardCharsets
-import java.util.Collections
-import java.util.LinkedHashMap
-import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
-import java.util.regex.Matcher
-import java.util.regex.Pattern
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import okhttp3.Call
@@ -42,6 +19,22 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.ResponseBody
 import timber.log.Timber
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.IOException
+import java.io.InputStream
+import java.io.InterruptedIOException
+import java.net.Proxy
+import java.net.SocketTimeoutException
+import java.nio.charset.StandardCharsets
+import java.util.Collections
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.regex.Matcher
+import java.util.regex.Pattern
 
 class NodeClient(
     context: Context,
@@ -51,35 +44,30 @@ class NodeClient(
     /** 运行时加载阶段：仅描述“进程外”的耗时环节，成功/失败由调用方判定 */
     enum class Stage { DOWNLOADING, STARTING }
 
+    /** Node 包加载与 `/config` 初始化结果（支持记录 `.pending` 自动回滚事实） */
+    data class LoadResult(
+        val configJson: String,
+        val rolledBack: Boolean = false,
+        val rollbackReason: String = "",
+    )
+
     private val context: Context = context.applicationContext ?: context
+    private val processManager = NodeProcessManager(this.context)
     private val profileLock = Any()
     private val calls = Collections.newSetFromMap(ConcurrentHashMap<Call, Boolean>())
     private val callThreads = ConcurrentHashMap<Call, Thread>()
-    private val initializations = LinkedHashMap<String, String>()
+    private val initTracker = NodeSpiderInitTracker()
     private val pendingClears = AtomicInteger()
 
     @Volatile private var loadCancellation: AtomicBoolean? = null
     @Volatile private var session: Long = 0
-    @Volatile private var startLatch: CountDownLatch? = null
-    @Volatile private var startError: Exception? = null
-    @Volatile private var address: String? = null
-    @Volatile private var token: String? = null
     @Volatile private var bundle: NodeBundle? = null
-    @Volatile private var generation: Long = 0
-    @Volatile private var startedAt: Long = 0
-    @Volatile private var nodePid: Int = 0
-    @Volatile private var nodeVersion: String = ""
-    @Volatile private var nodeArch: String = ""
     @Volatile private var currentPlayFlag: String = ""
     @Volatile private var currentPlayId: String = ""
-    @Volatile private var connection: NodeConnection? = null
 
     companion object {
         private const val SUCCESS_RESPONSE = "{\"success\":true,\"code\":0}"
         private const val FAILURE_RESPONSE = "{\"success\":false,\"code\":-1}"
-        private const val START_TIMEOUT_SECONDS = 45L
-        private const val STOP_TIMEOUT_SECONDS = 5L
-        private const val BIND_TIMEOUT_SECONDS = 1L
         private val FAST_TIMEOUT_MILLIS = TimeUnit.SECONDS.toMillis(15)
         private val REQUEST_TIMEOUT_MILLIS = TimeUnit.SECONDS.toMillis(45)
         private val PLAY_TIMEOUT_MILLIS = TimeUnit.SECONDS.toMillis(60)
@@ -176,34 +164,23 @@ class NodeClient(
 
     init {
         this.messageBridge.addHandler(this)
+        removeLegacyActiveSourceMarker()
     }
 
-    fun isRunning(): Boolean = !address.isNullOrEmpty() && connection != null
+    private fun removeLegacyActiveSourceMarker() {
+        try {
+            val legacy = File(File(context.filesDir, "nodejs"), "active_source")
+            if (legacy.isFile) legacy.delete()
+        } catch (_: Exception) {
+        }
+    }
 
-    /** 当前运行中的 bundle 与 [other] 是否同一版本（用于后台比对，避免无谓重启） */
+    fun isRunning(): Boolean = processManager.isRunning()
+
     fun isSameVersion(other: NodeBundle?): Boolean = bundle?.isSameVersion(other) == true
 
     fun accept() {
         bundle?.accept()
-    }
-
-    private fun saveActiveSource(source: String) {
-        try {
-            val dir = File(context.filesDir, "nodejs")
-            if (!dir.exists()) dir.mkdirs()
-            File(dir, "active_source").writeText(source, Charsets.UTF_8)
-        } catch (e: Exception) {
-            Timber.w(e, "保存 Node active_source 失败")
-        }
-    }
-
-    private fun readActiveSource(): String? {
-        return try {
-            val file = File(File(context.filesDir, "nodejs"), "active_source")
-            if (file.isFile) file.readText(Charsets.UTF_8).trim().ifEmpty { null } else null
-        } catch (_: Exception) {
-            null
-        }
     }
 
     fun hasCachedBundle(source: String? = null): Boolean {
@@ -216,13 +193,7 @@ class NodeClient(
 
     private fun restoreBundle(source: String? = null): NodeBundle? {
         if (!source.isNullOrEmpty()) {
-            val target = NodeBundle.restore(context, source)
-            if (target != null) return target
-        }
-        val activeSource = readActiveSource()
-        if (!activeSource.isNullOrEmpty()) {
-            val target = NodeBundle.restore(context, activeSource)
-            if (target != null) return target
+            NodeBundle.restore(context, source)?.let { return it }
         }
         return NodeBundle.restoreLatest(context)
     }
@@ -240,20 +211,16 @@ class NodeClient(
     @Throws(Exception::class)
     fun ensureStarted(source: String? = null, onStage: ((Stage) -> Unit)? = null): Boolean {
         if (isRunning()) return true
-        if (!source.isNullOrEmpty()) {
-            saveActiveSource(source)
-        }
         val current = bundle ?: restoreBundle(source)
         if (current != null) {
             onStage?.invoke(Stage.STARTING)
-            start(current)
-            replayInitializations()
+            startBundleWithPendingRollback(current, onStage = onStage)
             return true
         }
         if (!source.isNullOrEmpty()) {
             val prepared = NodeBundle.prepare(context, source) { onStage?.invoke(Stage.DOWNLOADING) }
             onStage?.invoke(Stage.STARTING)
-            start(prepared)
+            startBundleWithPendingRollback(prepared, onStage = onStage)
             return true
         }
         return false
@@ -265,116 +232,132 @@ class NodeClient(
         if (isRunning()) return
         val current = bundle ?: restoreBundle()
         if (current != null) {
-            start(current)
-            replayInitializations()
+            startBundleWithPendingRollback(current, onStage = null)
         }
     }
 
     @Synchronized
     @Throws(Exception::class)
     fun load(source: String, onStage: ((Stage) -> Unit)? = null): String {
+        return loadWithResult(source, onStage).configJson
+    }
+
+    @Synchronized
+    @Throws(Exception::class)
+    fun loadWithResult(source: String, onStage: ((Stage) -> Unit)? = null): LoadResult {
+        return executeLoad(onStage) {
+            NodeBundle.prepare(context, source) { onStage?.invoke(Stage.DOWNLOADING) }
+        }
+    }
+
+    @Synchronized
+    @Throws(Exception::class)
+    fun loadFromStream(
+        localSourceUrl: String,
+        streamOpener: () -> InputStream,
+        onStage: ((Stage) -> Unit)? = null,
+    ): LoadResult {
+        return executeLoad(onStage) {
+            NodeBundle.prepareFromStream(context, localSourceUrl, streamOpener) {
+                onStage?.invoke(Stage.DOWNLOADING)
+            }
+        }
+    }
+
+    private inline fun executeLoad(
+        noinline onStage: ((Stage) -> Unit)?,
+        prepareBlock: () -> NodeBundle,
+    ): LoadResult {
         checkLoadCanceled()
-        saveActiveSource(source)
         loadCancellation = AtomicBoolean()
-        return try {
-            val prepared = NodeBundle.prepare(context, source) { onStage?.invoke(Stage.DOWNLOADING) }
+        try {
+            val prepared = prepareBlock()
             checkLoadCanceled()
             if (canReuse(prepared)) {
-                // 版本一致：运行时原样保留，只重取 /config 刷新站点列表。
-                // 刻意不 bump session、不 cancelRequests —— 那会把用户正在进行的
-                // 搜索 / 详情 / 播放解析全部判成 superseded 而打断，但实际上
-                // 运行时根本没变，没有任何理由打断它们
                 val result = NodeConfigMapper.transform(get("/config"))
                 checkLoadCanceled()
-                return result
+                return LoadResult(result)
             }
-            // 确实要换包才打断：清掉旧的站点初始化记录，再重启运行时
-            session++
-            synchronized(initializations) {
-                initializations.clear()
+            return try {
+                session++
+                initTracker.clear()
+                startAndFetchConfigWithRollback(prepared, onStage)
+            } catch (error: Throwable) {
+                clearPreservingFailure(error)
+                throw error
             }
-            onStage?.invoke(Stage.STARTING)
-            start(prepared)
-            val result = NodeConfigMapper.transform(get("/config"))
-            checkLoadCanceled()
-            result
-        } catch (error: Throwable) {
-            clearPreservingFailure(error)
-            throw error
         } finally {
             loadCancellation = null
         }
     }
 
+    private fun startBundleWithPendingRollback(
+        target: NodeBundle,
+        onStage: ((Stage) -> Unit)?,
+    ) {
+        try {
+            start(target)
+        } catch (error: Exception) {
+            if (isInterrupted(error)) throw error
+            val fallback = if (target.isPending) NodeBundle.rollbackPending(target.root, target.data) else null
+            if (fallback == null) throw error
+            Timber.w(error, "检测到未验收新包启动异常，已自动回滚至上一稳定版本")
+            onStage?.invoke(Stage.STARTING)
+            start(fallback)
+        }
+    }
+
+    private fun startAndFetchConfigWithRollback(
+        prepared: NodeBundle,
+        onStage: ((Stage) -> Unit)?,
+    ): LoadResult {
+        return try {
+            onStage?.invoke(Stage.STARTING)
+            start(prepared)
+            val result = fetchAndValidateConfig()
+            checkLoadCanceled()
+            LoadResult(result)
+        } catch (error: Exception) {
+            if (isInterrupted(error)) throw error
+            val fallback = if (prepared.isPending) NodeBundle.rollbackPending(prepared.root, prepared.data) else null
+            if (fallback == null) throw error
+            Timber.w(error, "新 Node 包启动或解析 /config 失败，已回滚至上一版本")
+            onStage?.invoke(Stage.STARTING)
+            start(fallback)
+            val fallbackConfig = fetchAndValidateConfig()
+            checkLoadCanceled()
+            LoadResult(
+                configJson = fallbackConfig,
+                rolledBack = true,
+                rollbackReason = error.message.orEmpty(),
+            )
+        }
+    }
+
+    private fun fetchAndValidateConfig(): String {
+        val transformed = NodeConfigMapper.transform(get("/config"))
+        val obj = Json.parseToJsonElement(transformed) as? JsonObject
+        val sites = obj?.get("sites") as? JsonArray
+        if (sites == null || sites.isEmpty()) {
+            throw NodeResponseException("Node /config returned no active sites")
+        }
+        return transformed
+    }
+
     private fun canReuse(prepared: NodeBundle): Boolean {
-        return bundle?.isSameVersion(prepared) == true && !address.isNullOrEmpty()
+        return bundle?.isSameVersion(prepared) == true && !processManager.address.isNullOrEmpty()
     }
 
     private fun start(prepared: NodeBundle) {
         checkLoadCanceled()
         cancelRequests()
-        stopService()
-        generation++
-        token = UUID.randomUUID().toString()
-        messageBridge.token = token
-        val bridgePort = messageBridge.start(LocalMessageBridge.DEFAULT_PORT)
-        bindProcess(prepared, bridgePort)
-        awaitStarted()
-    }
-
-    private fun bindProcess(prepared: NodeBundle, bridgePort: Int) {
+        processManager.stopService()
         bundle = prepared
-        address = null
-        startError = null
-        startLatch = CountDownLatch(1)
-        val data = prepared.data
-        val intent = Intent(context, NodeService::class.java)
-            .setAction(NodeService.ACTION_START)
-            .putExtra(NodeService.EXTRA_INDEX, prepared.index.absolutePath)
-            .putExtra(NodeService.EXTRA_CONFIG, prepared.config.absolutePath)
-            .putExtra(NodeService.EXTRA_DATA, data.absolutePath)
-            .putExtra(NodeService.EXTRA_BRIDGE_PORT, bridgePort)
-            .putExtra(NodeService.EXTRA_TOKEN, token)
-        val next = NodeConnection(generation)
-        connection = next
-        next.bound = context.bindService(intent, next, Context.BIND_AUTO_CREATE)
-        if (!next.bound) throw IOException("Unable to bind Node service")
-    }
-
-    private fun awaitStarted() {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(START_TIMEOUT_SECONDS)
-        val latch = checkNotNull(startLatch)
-        while (!latch.await(100, TimeUnit.MILLISECONDS)) {
-            checkLoadCanceled()
-            if (System.nanoTime() >= deadline) throw IOException("Node startup timed out")
-        }
-        checkLoadCanceled()
-        val error = startError
-        if (error != null) throw error
-        if (address.isNullOrEmpty()) throw IOException("Node server did not report an address")
-        startedAt = System.currentTimeMillis()
-        Timber.i("Node.js 运行时已启动: %s (PID: %d)", address, nodePid)
-    }
-
-    private fun stopService() {
-        val current = connection
-        if (current != null) {
-            synchronized(current) {
-                connection = null
-            }
-            current.stop()
-            return
-        }
-        try {
-            context.stopService(Intent(context, NodeService::class.java))
-        } catch (_: Exception) {
-        }
-    }
-
-    private fun onServiceLost(message: String) {
-        address = null
-        if (startError == null) startError = IOException(message)
-        startLatch?.countDown()
+        val sessionToken = UUID.randomUUID().toString()
+        processManager.beginSession(sessionToken)
+        messageBridge.token = sessionToken
+        val bridgePort = messageBridge.start(LocalMessageBridge.DEFAULT_PORT)
+        processManager.bindAndAwait(prepared, bridgePort, sessionToken) { checkLoadCanceled() }
     }
 
     fun clear() {
@@ -392,27 +375,13 @@ class NodeClient(
     private fun clearRuntime() {
         session++
         cancelRequests()
-        synchronized(initializations) {
-            initializations.clear()
-        }
-        stopService()
-        resetRuntimeState()
-    }
-
-    private fun resetRuntimeState() {
+        initTracker.clear()
+        processManager.stopService()
         bundle = null
-        address = null
-        token = null
         loadCancellation = null
-        startLatch = null
-        startError = null
-        generation++
-        startedAt = 0
-        nodePid = 0
-        nodeVersion = ""
-        nodeArch = ""
         currentPlayFlag = ""
         currentPlayId = ""
+        processManager.resetState()
     }
 
     private fun clearPreservingFailure(failure: Throwable?) {
@@ -458,50 +427,22 @@ class NodeClient(
         }
     }
 
-    override fun onMessage(action: String, opt: kotlinx.serialization.json.JsonElement?): String? {
+    override fun onMessage(action: String, opt: JsonElement?): String? {
         val optObj = opt as? JsonObject ?: JsonObject(emptyMap())
-        return dispatchMessage(action, optObj)
-    }
-
-    private fun dispatchMessage(action: String, opt: JsonObject): String? {
         return when (action) {
-            "serverStarted" -> onStarted(opt)
-            "nodeError" -> onError(opt)
+            "serverStarted" -> {
+                processManager.onStarted(optObj)
+                SUCCESS_RESPONSE
+            }
+            "nodeError" -> {
+                processManager.onError(optObj)
+                SUCCESS_RESPONSE
+            }
             "queryProfile" -> readProfile().toString()
-            "saveProfile" -> saveProfile(opt)
+            "saveProfile" -> saveProfile(optObj)
             "getPlayInfo" -> getPlayInfo()
             else -> null
         }
-    }
-
-    private fun onStarted(opt: JsonObject): String {
-        val current = connection
-        if (current == null || !tokenMatches(opt)) return SUCCESS_RESPONSE
-        synchronized(current) {
-            if (connection !== current || current.stopped.count == 0L || !tokenMatches(opt)) return SUCCESS_RESPONSE
-            val value = opt["address"]?.jsonPrimitive?.content.orEmpty()
-            if (value.startsWith("http://") || value.startsWith("https://")) {
-                address = value.replace("://localhost:", "://127.0.0.1:")
-                nodePid = opt["pid"]?.jsonPrimitive?.intOrNull ?: 0
-                nodeVersion = opt["version"]?.jsonPrimitive?.content.orEmpty()
-                nodeArch = opt["arch"]?.jsonPrimitive?.content.orEmpty()
-                startLatch?.countDown()
-            }
-        }
-        return SUCCESS_RESPONSE
-    }
-
-    private fun onError(opt: JsonObject): String {
-        if (!tokenMatches(opt)) return SUCCESS_RESPONSE
-        val message = opt["message"]?.jsonPrimitive?.content.orEmpty()
-        startError = if (message.isEmpty()) null else IOException(message)
-        startLatch?.countDown()
-        return SUCCESS_RESPONSE
-    }
-
-    private fun tokenMatches(opt: JsonObject): Boolean {
-        val curToken = token
-        return !curToken.isNullOrEmpty() && curToken == opt["token"]?.jsonPrimitive?.content.orEmpty()
     }
 
     fun getProfileFile(): File? {
@@ -556,21 +497,48 @@ class NodeClient(
 
     @Throws(Exception::class)
     fun initialize(api: String, body: JsonObject) {
-        post(NodeRoute.append(api, "/init"), body)
-        synchronized(initializations) {
-            initializations[api] = body.toString()
+        request { state ->
+            try {
+                executePost(state, NodeRoute.append(api, "/init"), body)
+            } catch (e: NodeHttpException) {
+                if (e.code != 404) throw e
+            }
+            initTracker.markInitialized(state.generation, api)
         }
     }
 
     @Throws(Exception::class)
     fun post(api: String, body: JsonObject): String {
-        return request(api) { state -> executePost(state, api, body) }
+        return request { state -> executePost(state, api, body) }
+    }
+
+    /**
+     * 向指定爬虫路由发起请求，自动按当前 `:nodejs` 进程代际保证该站点已执行过一次 `/init`
+     *（即使站点 `ext` 为空或 `:nodejs` 后台重建后，也不会带着未初始化状态直接访问 `/detail`、`/play` 等端点）。
+     */
+    @Throws(Exception::class)
+    fun postForSpider(baseApi: String, initBody: JsonObject, route: String, body: JsonObject): String {
+        val targetApi = NodeRoute.append(baseApi, route)
+        return request(SpiderInit(baseApi, initBody)) { state -> executePost(state, targetApi, body) }
+    }
+
+    @Throws(Exception::class)
+    fun postOptionalForSpider(baseApi: String, initBody: JsonObject, route: String, body: JsonObject): String {
+        return postOrNullForSpider(baseApi, initBody, route, body).orEmpty()
+    }
+
+    @Throws(Exception::class)
+    fun postOrNullForSpider(baseApi: String, initBody: JsonObject, route: String, body: JsonObject): String? {
+        return try {
+            postForSpider(baseApi, initBody, route, body)
+        } catch (e: NodeHttpException) {
+            if (e.code == 404) null else throw e
+        }
     }
 
     @Throws(Exception::class)
     fun postOptional(api: String, body: JsonObject): String {
-        val result = postOrNull(api, body)
-        return result.orEmpty()
+        return postOrNull(api, body).orEmpty()
     }
 
     @Throws(Exception::class)
@@ -635,22 +603,30 @@ class NodeClient(
     }
 
     @Throws(Exception::class)
-    private fun <T> request(endpoint: String, operation: (RequestState) -> T): T {
+    private fun <T> request(
+        spiderInit: SpiderInit? = null,
+        operation: (RequestState) -> T,
+    ): T {
         if (!isRunning()) {
             ensureRunning()
         }
         var state = snapshot()
         return try {
+            if (spiderInit != null) {
+                state = ensureSpiderInitialized(state, spiderInit)
+            }
             operation(state)
         } catch (first: Exception) {
             checkSession(state)
             if (!isTransportFailure(first) || isInterrupted(first)) throw first
-            // 单次请求超时仅代表目标远端站点响应慢，不应调用 invalidate() 杀掉整个共享 Node 进程
             if (hasCause(first, SocketTimeoutException::class.java)) {
                 throw first
             }
             try {
                 state = recover(state)
+                if (spiderInit != null) {
+                    state = ensureSpiderInitialized(state, spiderInit)
+                }
                 operation(state)
             } catch (second: Exception) {
                 checkSession(state)
@@ -660,41 +636,68 @@ class NodeClient(
         }
     }
 
+    private fun ensureSpiderInitialized(
+        observed: RequestState,
+        spiderInit: SpiderInit,
+    ): RequestState {
+        if (initTracker.isInitialized(observed.generation, spiderInit.baseApi)) {
+            return observed
+        }
+        synchronized(initTracker.lockFor(spiderInit.baseApi)) {
+            var active = snapshot()
+            checkSession(active)
+            if (active.address.isNullOrEmpty()) {
+                ensureRunning()
+                active = snapshot()
+            }
+            if (initTracker.isInitialized(active.generation, spiderInit.baseApi)) {
+                return active
+            }
+            try {
+                executePost(active, NodeRoute.append(spiderInit.baseApi, "/init"), spiderInit.body)
+                initTracker.markInitialized(active.generation, spiderInit.baseApi)
+            } catch (e: NodeHttpException) {
+                if (e.code == 404) {
+                    // 兼容未注册 /init 路由的爬虫（如 czsapp.js），本进程代不再重复探测
+                    initTracker.markInitialized(active.generation, spiderInit.baseApi)
+                } else {
+                    Timber.w(e, "Node 站点 /init 返回 HTTP %d，继续尝试主请求: %s", e.code, spiderInit.baseApi)
+                }
+            } catch (e: Exception) {
+                checkSession(active)
+                if (isInterrupted(e)) throw e
+                if (isTransportFailure(e) && !hasCause(e, SocketTimeoutException::class.java)) {
+                    throw e
+                }
+                Timber.w(e, "Node 站点 /init 异常，继续尝试主请求: %s", spiderInit.baseApi)
+            }
+            return active
+        }
+    }
+
     @Synchronized
     @Throws(Exception::class)
     private fun recover(observed: RequestState): RequestState {
         checkSession(observed)
-        if (generation != observed.generation && !address.isNullOrEmpty()) return snapshot()
+        if (processManager.generation != observed.generation && processManager.isRunning()) {
+            return snapshot()
+        }
         val current = bundle ?: restoreBundle() ?: throw IOException("Node runtime has no bundle to restart")
         try {
             start(current)
-            replayInitializations()
         } catch (e: Exception) {
-            invalidate(snapshot(), e)
+            invalidate(snapshot())
             throw e
         }
         return snapshot()
     }
 
-    private fun replayInitializations() {
-        val snapshotEntries = synchronized(initializations) { ArrayList(initializations.entries) }
-        for ((key, value) in snapshotEntries) {
-            val body = Json.parseToJsonElement(value) as? JsonObject ?: continue
-            try {
-                executePost(snapshot(), NodeRoute.append(key, "/init"), body)
-            } catch (e: Exception) {
-                Timber.w(e, "重放站点初始化失败，跳过该站点: %s", key)
-            }
-        }
-    }
-
     @Synchronized
-    private fun invalidate(observed: RequestState, error: Exception) {
-        if (session != observed.session || generation != observed.generation) return
+    private fun invalidate(observed: RequestState) {
+        if (session != observed.session || processManager.generation != observed.generation) return
         cancelRequests()
-        stopService()
-        address = null
-        generation++
+        processManager.stopService()
+        processManager.invalidateAddressAndBumpGeneration()
     }
 
     @Throws(IOException::class)
@@ -713,7 +716,7 @@ class NodeClient(
 
     @Synchronized
     private fun snapshot(): RequestState {
-        return RequestState(session, generation, address, loadCancellation)
+        return RequestState(session, processManager.generation, processManager.address, loadCancellation)
     }
 
     @Synchronized
@@ -726,16 +729,17 @@ class NodeClient(
     }
 
     @Synchronized
-    @Throws(InterruptedIOException::class)
+    @Throws(IOException::class)
     private fun checkCurrent(state: RequestState) {
         checkSession(state)
-        if (generation != state.generation) throw InterruptedIOException("Node runtime was restarted")
+        // 同 session 下仅代际变化说明 :nodejs 被重启，抛出可恢复传输异常而非取消异常，便于外层自动重试到新进程
+        if (processManager.generation != state.generation) throw NodeRestartedException()
     }
 
-    fun getAddress(): String = address.orEmpty()
+    fun getAddress(): String = processManager.address.orEmpty()
 
     fun normalizeWeb(options: JsonObject): JsonObject {
-        val addr = this.address
+        val addr = processManager.address
         val result = options.toMutableMap()
         normalizeUrl(result, addr)
         val cookie = result["cookie"] as? JsonArray
@@ -772,6 +776,11 @@ class NodeClient(
         return target.newBuilder().scheme(runtime.scheme).host(runtime.host).port(runtime.port).build().toString()
     }
 
+    private data class SpiderInit(
+        val baseApi: String,
+        val body: JsonObject,
+    )
+
     private data class RequestState(
         val session: Long,
         val generation: Long,
@@ -779,102 +788,7 @@ class NodeClient(
         val cancellation: AtomicBoolean?,
     )
 
-    private inner class NodeConnection(private val session: Long) : ServiceConnection, IBinder.DeathRecipient {
-        val connected = CountDownLatch(1)
-        val stopped = CountDownLatch(1)
-        @Volatile var binder: IBinder? = null
-        @Volatile var bound: Boolean = false
-
-        @Synchronized
-        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
-            binder = service
-            try {
-                service?.linkToDeath(this, 0)
-            } catch (_: RemoteException) {
-                stopped.countDown()
-                notifyLost("Node service died while binding")
-            } finally {
-                connected.countDown()
-            }
-        }
-
-        override fun onServiceDisconnected(name: ComponentName?) {
-            connected.countDown()
-            stopped.countDown()
-            notifyLost("Node service disconnected")
-        }
-
-        override fun onBindingDied(name: ComponentName?) {
-            connected.countDown()
-            stopped.countDown()
-            notifyLost("Node service binding died")
-        }
-
-        override fun onNullBinding(name: ComponentName?) {
-            connected.countDown()
-            stopped.countDown()
-            notifyLost("Node service returned no binder")
-        }
-
-        @Synchronized
-        override fun binderDied() {
-            stopped.countDown()
-            notifyLost("Node service process died")
-        }
-
-        private fun notifyLost(message: String) {
-            if (connection !== this || generation != session) return
-            unbind()
-            onServiceLost(message)
-        }
-
-        @Synchronized
-        fun unbind() {
-            if (!bound) return
-            bound = false
-            try {
-                context.unbindService(this)
-            } catch (_: Exception) {
-            }
-        }
-
-        fun stop(): Boolean {
-            awaitConnection()
-            val target = binder
-            unbind()
-            requestStop()
-            awaitStopped(target)
-            binder = null
-            return target != null && !target.isBinderAlive
-        }
-
-        private fun requestStop() {
-            try {
-                context.stopService(Intent(context, NodeService::class.java))
-            } catch (_: Exception) {
-            }
-        }
-
-        private fun awaitConnection() {
-            if (bound && binder == null) {
-                try {
-                    connected.await(BIND_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-                } catch (_: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                }
-            }
-        }
-
-        private fun awaitStopped(target: IBinder?) {
-            if (target != null && target.isBinderAlive) {
-                try {
-                    stopped.await(STOP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-                } catch (_: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                }
-            }
-        }
-    }
+    private class NodeRestartedException : IOException("Node runtime was restarted")
 
     class NodeHttpException(
         val code: Int,

@@ -65,7 +65,13 @@ class NodeSpider(
         }
     }
 
-    @Volatile private var initialized = false
+    @Volatile private var initBody: JsonObject = buildInitBody(site.ext)
+
+    private fun buildInitBody(ext: String): JsonObject = buildJsonObject {
+        val value = ext.ifEmpty { site.ext }
+        put("ext", value)
+        put("extend", value)
+    }
 
     private suspend fun <T> runNodeIo(block: suspend () -> T): T = withContext(Dispatchers.IO) {
         val thread = Thread.currentThread()
@@ -81,35 +87,22 @@ class NodeSpider(
         }
     }
 
-    private suspend fun ensureInit() {
-        if (!initialized && site.ext.isNotBlank()) {
-            init(site.ext)
-            initialized = true
-        }
-    }
-
     override suspend fun init(ext: String) = runNodeIo {
-        val body = buildJsonObject {
-            val value = ext.ifEmpty { site.ext }
-            put("ext", value)
-            put("extend", value)
-        }
+        val body = buildInitBody(ext)
+        initBody = body
         client.initialize(site.api, body)
-        initialized = true
     }
 
     override suspend fun homeContent(filter: Boolean): Result = runNodeIo {
-        ensureInit()
         val body = buildJsonObject { put("filter", filter) }
         val raw = addLegacyConfigActions(call("/home", body))
         tagResult(ResultParser.parseResult(raw))
     }
 
     override suspend fun homeVideoContent(): Result = runNodeIo {
-        ensureInit()
-        var raw = client.postOptional(NodeRoute.append(site.api, "/homeVod"), EMPTY_BODY)
+        var raw = client.postOptionalForSpider(site.api, initBody, "/homeVod", EMPTY_BODY)
         if (raw.isEmpty()) {
-            raw = client.postOptional(NodeRoute.append(site.api, "/homeVideo"), EMPTY_BODY)
+            raw = client.postOptionalForSpider(site.api, initBody, "/homeVideo", EMPTY_BODY)
         }
         tagResult(ResultParser.parseResult(addLegacyConfigActions(raw)))
     }
@@ -120,7 +113,6 @@ class NodeSpider(
         filter: Boolean,
         extend: Map<String, String>,
     ): Result = runNodeIo {
-        ensureInit()
         val filterObj = buildJsonObject {
             for ((k, v) in extend) {
                 put(k, v)
@@ -138,7 +130,6 @@ class NodeSpider(
     }
 
     override suspend fun detailContent(ids: List<String>): Result = runNodeIo {
-        ensureInit()
         val body = buildJsonObject {
             put("id", ids.firstOrNull().orEmpty())
         }
@@ -147,7 +138,6 @@ class NodeSpider(
     }
 
     override suspend fun searchContent(keyword: String, quick: Boolean, pg: String): Result = runNodeIo {
-        ensureInit()
         val body = buildJsonObject {
             put("wd", keyword)
             put("quick", quick)
@@ -158,7 +148,6 @@ class NodeSpider(
     }
 
     override suspend fun playerContent(flag: String, id: String, vipFlags: List<String>): Result = runNodeIo {
-        ensureInit()
         client.setPlayInfo(flag, id)
         val body = buildJsonObject {
             put("flag", flag)
@@ -182,9 +171,8 @@ class NodeSpider(
     }
 
     override suspend fun action(action: String): Result = runNodeIo {
-        ensureInit()
         val body = buildJsonObject { put("action", action) }
-        var raw: String? = client.postOrNull(NodeRoute.append(site.api, "/action"), body)
+        var raw: String? = client.postOrNullForSpider(site.api, initBody, "/action", body)
         if (raw.isNullOrEmpty() && (isLegacyConfigSpider() || action.startsWith("{") || Vod.isActionId(action))) {
             val detailBody = buildJsonObject { put("id", action) }
             raw = call("/detail", detailBody)
@@ -226,7 +214,7 @@ class NodeSpider(
     }
 
     private fun call(route: String, body: JsonObject): String {
-        return client.post(NodeRoute.append(site.api, route), body)
+        return client.postForSpider(site.api, initBody, route, body)
     }
 }
 

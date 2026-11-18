@@ -1,5 +1,9 @@
 package com.mewbox.tv.ui.setting
 
+import com.mewbox.tv.ui.components.MewDialogShell
+import com.mewbox.tv.ui.components.MewDialogSpec
+import com.mewbox.tv.ui.components.OverlayTokens
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -39,7 +43,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.mewbox.tv.api.config.SettingsRepository
 
-private val BluePrimary = Color(0xFF217AF4)
+private val BluePrimary = OverlayTokens.Accent
 
 /**
  * 豆瓣想看 uid 设置弹窗：支持纯数字 uid 或个人主页链接（自动提取 people 段）。
@@ -54,19 +58,11 @@ fun DoubanDialog(
     var uid by rememberSaveable(initialUid) { mutableStateOf(initialUid) }
     var errorText by rememberSaveable { mutableStateOf("") }
 
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
+    MewDialogShell(
+        onDismiss = onDismiss,
+        spec = MewDialogSpec.Compact,
     ) {
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth(0.92f)
-                .widthIn(max = 440.dp),
-            shape = RoundedCornerShape(18.dp),
-            color = Color.White,
-            shadowElevation = 8.dp,
-        ) {
-            Column(modifier = Modifier.padding(20.dp)) {
+        Column(modifier = Modifier.padding(OverlayTokens.Padding)) {
                 Text(
                     text = "豆瓣想看",
                     fontSize = 20.sp,
@@ -174,5 +170,4 @@ fun DoubanDialog(
                 }
             }
         }
-    }
 }

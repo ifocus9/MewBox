@@ -1,6 +1,8 @@
 package com.mewbox.tv.api.config
 
 import android.content.Context
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -19,10 +21,15 @@ private val Context.dataStore by preferencesDataStore(name = "settings")
 
 /** 全局偏好：本地地址映射、最近一次订阅地址、搜索历史等。 */
 @Singleton
-class SettingsRepository @Inject constructor(
-    @param:ApplicationContext private val context: Context,
+class SettingsRepository internal constructor(
+    private val store: DataStore<Preferences>,
     private val hostMapping: HostMapping,
 ) {
+    @Inject
+    constructor(
+        @ApplicationContext context: Context,
+        hostMapping: HostMapping,
+    ) : this(context.dataStore, hostMapping)
     private val hostKey = stringPreferencesKey("host_mapping")
     private val configUrlKey = stringPreferencesKey("config_url")
     private val configIdKey = stringPreferencesKey("config_id")
@@ -46,12 +53,12 @@ class SettingsRepository @Inject constructor(
     var searchHistory: List<String> = emptyList()
         private set
 
-    val hostMappingFlow: Flow<String> = context.dataStore.data.map { it[hostKey].orEmpty() }
-    val configUrlFlow: Flow<String> = context.dataStore.data.map { it[configUrlKey].orEmpty() }
-    val configIdFlow: Flow<String> = context.dataStore.data.map { it[configIdKey].orEmpty() }
-    val doubanUidFlow: Flow<String> = context.dataStore.data.map { it[doubanUidKey].orEmpty() }
-    val compactEpisodeTitleFlow: Flow<Boolean> = context.dataStore.data.map { it[compactEpisodeKey] ?: false }
-    val searchHistoryFlow: Flow<List<String>> = context.dataStore.data.map { prefs ->
+    val hostMappingFlow: Flow<String> = store.data.map { it[hostKey].orEmpty() }
+    val configUrlFlow: Flow<String> = store.data.map { it[configUrlKey].orEmpty() }
+    val configIdFlow: Flow<String> = store.data.map { it[configIdKey].orEmpty() }
+    val doubanUidFlow: Flow<String> = store.data.map { it[doubanUidKey].orEmpty() }
+    val compactEpisodeTitleFlow: Flow<Boolean> = store.data.map { it[compactEpisodeKey] ?: false }
+    val searchHistoryFlow: Flow<List<String>> = store.data.map { prefs ->
         parseSearchHistory(prefs[searchHistoryKey].orEmpty())
     }
 
@@ -69,7 +76,7 @@ class SettingsRepository @Inject constructor(
 
     /** 启动时把持久化的映射与搜索历史装载进内存。 */
     suspend fun load() {
-        val prefs = context.dataStore.data.first()
+        val prefs = store.data.first()
         val saved = prefs[hostKey].orEmpty()
         currentConfigUrl = prefs[configUrlKey].orEmpty()
         currentConfigId = prefs[configIdKey].orEmpty()
@@ -86,19 +93,19 @@ class SettingsRepository @Inject constructor(
     suspend fun setHostMapping(value: String) {
         val v = value.trim()
         hostMapping.target = v
-        context.dataStore.edit { it[hostKey] = v }
+        store.edit { it[hostKey] = v }
     }
 
     suspend fun setConfigUrl(url: String) {
         val v = url.trim()
         currentConfigUrl = v
-        context.dataStore.edit { it[configUrlKey] = v }
+        store.edit { it[configUrlKey] = v }
     }
 
     suspend fun setConfigId(id: String) {
         val v = id.trim()
         currentConfigId = v
-        context.dataStore.edit { it[configIdKey] = v }
+        store.edit { it[configIdKey] = v }
     }
 
     suspend fun setActiveConfig(url: String, id: String) {
@@ -106,7 +113,7 @@ class SettingsRepository @Inject constructor(
         val i = id.trim()
         currentConfigUrl = u
         currentConfigId = i
-        context.dataStore.edit {
+        store.edit {
             it[configUrlKey] = u
             it[configIdKey] = i
         }
@@ -114,19 +121,19 @@ class SettingsRepository @Inject constructor(
 
     suspend fun setCompactEpisodeTitle(value: Boolean) {
         compactEpisodeTitle = value
-        context.dataStore.edit { it[compactEpisodeKey] = value }
+        store.edit { it[compactEpisodeKey] = value }
     }
 
     /** 保存豆瓣个人 uid（传入值应为 normalizeDoubanUid 归一化后的纯数字）。 */
     suspend fun setDoubanUid(uid: String) {
         val v = uid.trim()
-        context.dataStore.edit { it[doubanUidKey] = v }
+        store.edit { it[doubanUidKey] = v }
     }
 
     suspend fun addSearchHistory(keyword: String) {
         val kw = keyword.trim()
         if (kw.isBlank()) return
-        context.dataStore.edit { prefs ->
+        store.edit { prefs ->
             val current = parseSearchHistory(prefs[searchHistoryKey].orEmpty())
             val updated = (listOf(kw) + current.filter { it != kw }).take(20)
             searchHistory = updated
@@ -135,7 +142,7 @@ class SettingsRepository @Inject constructor(
     }
 
     suspend fun deleteSearchHistory(keyword: String) {
-        context.dataStore.edit { prefs ->
+        store.edit { prefs ->
             val current = parseSearchHistory(prefs[searchHistoryKey].orEmpty())
             val updated = current.filter { it != keyword }
             searchHistory = updated
@@ -145,7 +152,7 @@ class SettingsRepository @Inject constructor(
 
     suspend fun clearSearchHistory() {
         searchHistory = emptyList()
-        context.dataStore.edit { prefs ->
+        store.edit { prefs ->
             prefs.remove(searchHistoryKey)
         }
     }

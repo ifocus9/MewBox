@@ -1,5 +1,10 @@
 package com.mewbox.tv.ui.player
 
+import com.mewbox.tv.ui.components.MewDialogShell
+import com.mewbox.tv.ui.components.MewDialogSpec
+import com.mewbox.tv.ui.components.MewOverlayVariant
+import com.mewbox.tv.ui.components.OverlayTokens
+
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -65,27 +70,17 @@ internal fun PlayerMediaInfoDialog(
         }
     }
 
-    val screenWidthDp = LocalConfiguration.current.screenWidthDp
-    val isLand = screenWidthDp > 600
-
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
+    MewDialogShell(
+        onDismiss = onDismiss,
+        spec = MewDialogSpec.Player,
+        variant = MewOverlayVariant.Dark,
     ) {
-        Surface(
+        Column(
             modifier = Modifier
-                .fillMaxWidth(if (isLand) 0.62f else 0.92f)
-                .padding(vertical = 24.dp),
-            shape = RoundedCornerShape(24.dp),
-            color = Color(0xFF211F26),
-            tonalElevation = 6.dp,
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(OverlayTokens.Padding),
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-                    .padding(24.dp),
-            ) {
                 Text(
                     text = displayTitle,
                     fontSize = 20.sp,
@@ -139,7 +134,6 @@ internal fun PlayerMediaInfoDialog(
                 }
             }
         }
-    }
 }
 
 private fun Modifier.copyOnTapOrLongPress(

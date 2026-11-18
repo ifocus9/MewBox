@@ -302,8 +302,10 @@ fun DetailScreen(
                             selectedPlayUrl = state.selectedPlayUrl,
                             isResolvingPlay = state.isResolvingPlay,
                             onPlay = {
-                                viewModel.startPlayback()
-                                enterPlayer()
+                                if (vod.playFlags.any { it.episodes.isNotEmpty() }) {
+                                    viewModel.startPlayback()
+                                    enterPlayer()
+                                }
                             },
                             onToggleReverse = { viewModel.toggleEpisodeSort() },
                             onToggleCompact = { viewModel.toggleEpisodeCompact() },
@@ -376,7 +378,9 @@ fun DetailScreen(
                                 currentEpisodeName = state.selectedEpisode?.name ?: "",
                                 hasPrevEpisode = state.hasPreviousEpisode,
                                 hasNextEpisode = state.hasNextEpisode,
-                                hasMultiQuality = state.playUrls.size > 1 || (state.playUrls.size == 1 && state.playUrls.first().name != "默认"),
+                                playUrls = state.playUrls,
+                                selectedPlayUrl = state.selectedPlayUrl,
+                                onSelectPlayUrl = { viewModel.selectPlayUrl(it) },
                                 isResolvingPlay = state.isResolvingPlay,
                                 isAutoSearching = state.isAutoSearching,
                                 autoSearchMessage = state.autoSearchMessage,
@@ -416,9 +420,6 @@ fun DetailScreen(
                                     onToggleSort = { viewModel.toggleEpisodeSort() },
                                     onToggleCompact = { viewModel.toggleEpisodeCompact() },
                                     onSelectFlag = { flag -> viewModel.selectFlag(flag, playImmediately = true) },
-                                    playUrls = state.playUrls,
-                                    selectedPlayUrl = state.selectedPlayUrl,
-                                    onSelectPlayUrl = { viewModel.selectPlayUrl(it) },
                                     onSelectEpisode = {
                                         viewModel.selectEpisode(it)
                                         showFullscreenEpisodeDrawer = false

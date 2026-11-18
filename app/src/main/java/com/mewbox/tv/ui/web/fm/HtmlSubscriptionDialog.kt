@@ -1,5 +1,9 @@
 package com.mewbox.tv.ui.web.fm
 
+import com.mewbox.tv.ui.components.MewDialogShell
+import com.mewbox.tv.ui.components.MewDialogSpec
+import com.mewbox.tv.ui.components.OverlayTokens
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -34,6 +38,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -41,13 +46,14 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.mewbox.tv.bean.Config
+import com.mewbox.tv.ui.setting.FilePickerHelper
 
-private val TextPrimary = Color(0xFF1A1A1A)
-private val TextSecondary = Color(0xFF8E8E93)
+private val TextPrimary = OverlayTokens.TextPrimary
+private val TextSecondary = OverlayTokens.TextSecondary
 private val AccentBlue = Color(0xFF0A7AFF)
 private val ActiveItemBg = Color(0xFFEEF6FF)
 private val ActiveItemBorder = Color(0xFF99C8FF)
-private val ItemBg = Color(0xFFF2F4F7)
+private val ItemBg = OverlayTokens.ItemBg
 private val ItemBorder = Color(0xFFE2E5EA)
 
 /**
@@ -68,21 +74,13 @@ fun HtmlSubscriptionDialog(
     onOpenSettings: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
+    MewDialogShell(
+        onDismiss = onDismiss,
+        spec = MewDialogSpec.List,
     ) {
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth(0.92f)
-                .widthIn(max = 480.dp),
-            shape = RoundedCornerShape(18.dp),
-            color = Color.White,
-            shadowElevation = 8.dp,
+        Column(
+            modifier = Modifier.padding(OverlayTokens.Padding),
         ) {
-            Column(
-                modifier = Modifier.padding(20.dp),
-            ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -232,8 +230,9 @@ fun HtmlSubscriptionDialog(
                                             )
                                         }
                                         if (hasCustomName) {
+                                            val context = LocalContext.current
                                             Text(
-                                                text = item.url,
+                                                text = formatSubscriptionSubtitle(context, item),
                                                 fontSize = 11.5.sp,
                                                 color = TextSecondary,
                                                 maxLines = 1,
@@ -275,6 +274,15 @@ fun HtmlSubscriptionDialog(
                 }
             }
         }
+}
+
+private fun formatSubscriptionSubtitle(context: android.content.Context, item: Config): String {
+    val trimmed = item.url.trim()
+    return when {
+        trimmed.startsWith("local://node/", ignoreCase = true) -> "本地 Node.js 压缩包"
+        trimmed.startsWith("local://vod/", ignoreCase = true) -> "本地点播配置文件"
+        FilePickerHelper.isInternalLocalConfigUrl(context, trimmed) -> "本地网页订阅文件"
+        else -> trimmed
     }
 }
 

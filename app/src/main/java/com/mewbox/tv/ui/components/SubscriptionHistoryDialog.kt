@@ -34,9 +34,9 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.mewbox.tv.bean.Config
 
-private val TextPrimary = Color(0xFF1A1A1A)
-private val TextSecondary = Color(0xFF8E8E93)
-private val ItemBg = Color(0xFFF2F4F7)
+private val TextPrimary = OverlayTokens.TextPrimary
+private val TextSecondary = OverlayTokens.TextSecondary
+private val ItemBg = OverlayTokens.ItemBg
 private val ItemBorder = Color(0xFFE2E5EA)
 
 /**
@@ -55,21 +55,13 @@ fun SubscriptionHistoryDialog(
     onEdit: ((Config) -> Unit)? = null,
     onDelete: ((String) -> Unit)? = null,
 ) {
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
+    MewDialogShell(
+        onDismiss = onDismiss,
+        spec = MewDialogSpec.List,
     ) {
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth(0.92f)
-                .widthIn(max = 480.dp),
-            shape = RoundedCornerShape(18.dp),
-            color = Color.White,
-            shadowElevation = 8.dp,
+        Column(
+            modifier = Modifier.padding(OverlayTokens.Padding),
         ) {
-            Column(
-                modifier = Modifier.padding(20.dp),
-            ) {
                 // 订阅列表
                 if (configs.isEmpty()) {
                     Row(
@@ -143,5 +135,4 @@ fun SubscriptionHistoryDialog(
                 }
             }
         }
-    }
 }

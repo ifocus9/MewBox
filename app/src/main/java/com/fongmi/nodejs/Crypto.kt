@@ -15,6 +15,9 @@ object Crypto {
     fun md5(value: String?): String = hash(value, MD5)
 
     @JvmStatic
+    fun md5(bytes: ByteArray): String = toHex(newDigest(MD5).digest(bytes))
+
+    @JvmStatic
     fun md5(file: File): String {
         return try {
             toHex(digest(file, newDigest(MD5)))

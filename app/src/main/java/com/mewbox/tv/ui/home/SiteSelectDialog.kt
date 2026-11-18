@@ -1,5 +1,9 @@
 package com.mewbox.tv.ui.home
 
+import com.mewbox.tv.ui.components.MewOverlayVariant
+import com.mewbox.tv.ui.components.MewSheetShell
+import com.mewbox.tv.ui.components.OverlayTokens
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -11,10 +15,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -48,17 +52,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import com.mewbox.tv.bean.Site
 
 /**
- * 切换首页源弹窗（严格对齐 MewPlayer dialog_site.xml 与 adapter_site.xml 样式）
- * - 20dp 圆角纯白卡片，立体阴影与外边距
+ * 切换首页源底部抽屉
  * - 顶部集成 40dp 椭圆搜索输入框（#F3F4F6 底色，前置搜索图标，即时过滤，清除按钮）
- * - 顶部右侧提供单双列切换按钮（#F3F4F6 圆形按钮，对齐 MewPlayer ic_site_single_column / ic_site_double_column）
- * - 站源条目高度 44dp，圆角 12dp，左侧健康绿点（7dp），单列时展示搜索/换源属性图标
- * - 选中态：#EEF4FF 背景，1.2dp #217AF4 边框，字体加粗变蓝，右侧勾选
+ * - 顶部右侧提供单双列切换按钮（#F3F4F6 圆形按钮）
+ * - 站源条目高度 44dp，圆角 12dp，单列时展示换源属性图标
+ * - 选中态：#EEF4FF 背景，1.2dp #217AF4 边框，字体加粗变蓝
  * - 未选中态：#F8F9FA 背景，1dp #E5E7EB 边框，#1F2329 字体
  */
 @Composable
@@ -82,24 +83,16 @@ fun SiteSelectDialog(
         }
     }
 
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-    ) {
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth(0.92f)
-                .widthIn(max = 500.dp)
-                .heightIn(max = 540.dp),
-            shape = RoundedCornerShape(20.dp),
-            color = Color.White,
-            shadowElevation = 8.dp,
+    MewSheetShell(
+        onDismiss = onDismiss,
+        variant = MewOverlayVariant.Light,
+    ) { focusModifier ->
+        Column(
+            modifier = focusModifier
+                .fillMaxWidth()
+                .padding(horizontal = OverlayTokens.Padding, vertical = 8.dp)
+                .navigationBarsPadding(),
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 20.dp, top = 20.dp, end = 20.dp, bottom = 16.dp),
-            ) {
                 // 顶部搜索栏与单双列切换按钮（对齐 MewPlayer dialog_site.xml）
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -202,7 +195,7 @@ fun SiteSelectDialog(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .weight(1f, fill = false),
+                            .heightIn(max = 440.dp),
                     ) {
                         items(filteredSites, key = { it.key }) { site ->
                             val isSelected = site.key == currentSite?.key
@@ -220,7 +213,7 @@ fun SiteSelectDialog(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .weight(1f, fill = false),
+                            .heightIn(max = 440.dp),
                     ) {
                         items(filteredSites, key = { it.key }) { site ->
                             val isSelected = site.key == currentSite?.key
@@ -233,9 +226,10 @@ fun SiteSelectDialog(
                         }
                     }
                 }
+
+                Spacer(Modifier.height(16.dp))
             }
         }
-    }
 }
 
 @Composable

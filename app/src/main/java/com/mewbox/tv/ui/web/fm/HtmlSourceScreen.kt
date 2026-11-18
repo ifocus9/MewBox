@@ -323,11 +323,12 @@ fun HtmlSourceScreen(
             initialUrl = configInitialUrl,
             initialName = configInitialName,
             onDismiss = { showConfigDialog = false },
-            onConfirm = { url, name ->
+            onConfirm = { url, name, pickedUri ->
                 showConfigDialog = false
                 viewModel.saveConfig(
                     url = url,
                     name = name,
+                    pickedUri = pickedUri,
                     isEdit = configEditMode,
                     oldUrl = configEditOldUrl,
                 )

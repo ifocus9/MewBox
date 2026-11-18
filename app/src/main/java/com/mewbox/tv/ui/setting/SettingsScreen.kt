@@ -255,11 +255,12 @@ fun SettingsScreen(
                 viewModel.consumeMessage()
                 showConfigDialog = false
             },
-            onConfirm = { url, name ->
+            onConfirm = { url, name, pickedUri ->
                 showConfigDialog = false
                 viewModel.saveConfig(
                     url = url,
                     name = name,
+                    pickedUri = pickedUri,
                     isEdit = configDialogIsEdit,
                     oldUrl = configDialogInitialUrl,
                 )

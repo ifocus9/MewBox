@@ -44,6 +44,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -208,6 +209,7 @@ fun DetailHero(
     resumeEpisodeText: String?,
     onPlay: () -> Unit,
     modifier: Modifier = Modifier,
+    hasPlayableRoutes: Boolean = true,
     quickBackdrop: String? = null,
     quickPoster: String? = null,
     onTitleLongClick: (() -> Unit)? = null,
@@ -322,6 +324,7 @@ fun DetailHero(
             descriptionText = descriptionText,
             descriptionExpanded = descriptionExpanded,
             resumeEpisodeText = resumeEpisodeText,
+            hasPlayableRoutes = hasPlayableRoutes,
             onToggleDescription = { descriptionExpanded = !descriptionExpanded },
             onPlay = onPlay,
             modifier = Modifier.padding(
@@ -561,6 +564,7 @@ private fun DetailHeroInfoBlock(
     descriptionText: String?,
     descriptionExpanded: Boolean,
     resumeEpisodeText: String?,
+    hasPlayableRoutes: Boolean,
     onToggleDescription: () -> Unit,
     onPlay: () -> Unit,
     modifier: Modifier = Modifier,
@@ -627,34 +631,62 @@ private fun DetailHeroInfoBlock(
             )
         }
 
-        // 播放胶囊大按钮（对齐 AVBox 经典 Button 胶囊）
-        val playButtonText = if (!resumeEpisodeText.isNullOrEmpty()) "继续播放" else "播放"
-        Button(
-            onClick = onPlay,
-            modifier = Modifier
-                .padding(top = 18.dp)
-                .widthIn(min = HeroPlayCapsuleMinWidth)
-                .height(HeroPlayCapsuleHeight),
-            shape = RoundedCornerShape(26.dp),
-            contentPadding = PaddingValues(horizontal = HeroPlayCapsuleHorizontalPadding),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
-            ),
-        ) {
-            Icon(
-                imageVector = Icons.Default.PlayArrow,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onPrimary,
-                modifier = Modifier.size(24.dp),
-            )
-            Spacer(Modifier.width(6.dp))
-            Text(
-                text = playButtonText,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onPrimary,
-            )
+        if (hasPlayableRoutes) {
+            // 播放胶囊大按钮（对齐 AVBox 经典 Button 胶囊）
+            val playButtonText = if (!resumeEpisodeText.isNullOrEmpty()) "继续播放" else "播放"
+            Button(
+                onClick = onPlay,
+                modifier = Modifier
+                    .padding(top = 18.dp)
+                    .widthIn(min = HeroPlayCapsuleMinWidth)
+                    .height(HeroPlayCapsuleHeight),
+                shape = RoundedCornerShape(26.dp),
+                contentPadding = PaddingValues(horizontal = HeroPlayCapsuleHorizontalPadding),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                ),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.size(24.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = playButtonText,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onPrimary,
+                )
+            }
+        } else {
+            // 未解析出线路或分集时，不展示播放按钮，改为提示暂无播放资源
+            Row(
+                modifier = Modifier
+                    .padding(top = 18.dp)
+                    .widthIn(min = HeroPlayCapsuleMinWidth)
+                    .height(HeroPlayCapsuleHeight)
+                    .detailGlass(RoundedCornerShape(26.dp))
+                    .padding(horizontal = HeroPlayCapsuleHorizontalPadding),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Info,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "暂无播放资源",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }

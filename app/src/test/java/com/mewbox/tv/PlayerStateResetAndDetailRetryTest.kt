@@ -1,7 +1,11 @@
 package com.mewbox.tv
 
 import androidx.media3.common.C
+import com.mewbox.tv.bean.Episode
+import com.mewbox.tv.bean.Flag
+import com.mewbox.tv.bean.Result
 import com.mewbox.tv.bean.Site
+import com.mewbox.tv.bean.Vod
 import com.mewbox.tv.domain.SiteRepository
 import com.mewbox.tv.player.PlaybackState
 import com.mewbox.tv.player.PlayerState
@@ -117,5 +121,32 @@ class PlayerStateResetAndDetailRetryTest {
         assertTrue(SiteRepository.shouldRetryDetailError(elapsedMs = 1_500L, attempt = 1, maxAttempts = 3))
         assertFalse(SiteRepository.shouldRetryDetailError(elapsedMs = 10_000L, attempt = 1, maxAttempts = 3))
         assertFalse(SiteRepository.shouldRetryDetailError(elapsedMs = 500L, attempt = 3, maxAttempts = 3))
+    }
+
+    @Test
+    fun siteRepository_hasPlayableDetail_detectsEmptyPlaceholderVod() {
+        val placeholder = Result(
+            list = listOf(
+                Vod(vodId = "12345", vodName = "", vodPlayFrom = "无", vodPlayUrl = "", playFlags = emptyList()),
+            ),
+        )
+        assertFalse(SiteRepository.hasPlayableDetail(Result()))
+        assertFalse(SiteRepository.hasPlayableDetail(placeholder))
+
+        val playable = Result(
+            list = listOf(
+                Vod(
+                    vodId = "12345",
+                    vodName = "测试影片",
+                    playFlags = listOf(Flag("1080", listOf(Episode("第1集", "param1", 0)))),
+                ),
+            ),
+        )
+        assertTrue(SiteRepository.hasPlayableDetail(playable))
+
+        val actionItem = Result(
+            list = listOf(Vod(vodId = "openInternalWebsite", action = "openInternalWebsite")),
+        )
+        assertTrue(SiteRepository.hasPlayableDetail(actionItem))
     }
 }

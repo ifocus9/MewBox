@@ -167,6 +167,13 @@ internal fun BoxScope.PlayerGestureHud(
 ) {
     // 长按倍速播放提示：复用统一的手势 HUD 胶囊，与快进 / 亮度 / 音量保持一致
     GestureHudPill(visible = isBoostPlaying) {
+        Icon(
+            imageVector = Icons.Default.FastForward,
+            contentDescription = null,
+            tint = Color.White,
+            modifier = Modifier.size(20.dp),
+        )
+        Spacer(modifier = Modifier.width(8.dp))
         Text(
             text = formatPlaybackSpeed(boostSpeed),
             color = Color.White,

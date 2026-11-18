@@ -65,6 +65,15 @@ class SiteRepository @Inject constructor(
         )
 
         /**
+         * 判断详情结果是否包含可播放剧集或可执行动作：
+         * 部分 Node 爬虫在登录态/网络瞬态异常时会返回占位空对象（如 `vod_play_from="无", vod_play_url=""`），
+         * 虽然 `list` 非空但无任何有效剧集，短耗时返回时应纳入重试。
+         */
+        internal fun hasPlayableDetail(result: Result): Boolean {
+            return result.list.any { it.playFlags.isNotEmpty() || it.action.isNotEmpty() }
+        }
+
+        /**
          * 仅在 Node/T4 源“短耗时瞬时返回空”时重试（例如后台切换唤醒间隙）；
          * 若单次详情请求已耗时较久仍为空，说明远端站点已超时或无数据，避免重复阻塞数十秒。
          */
@@ -172,7 +181,7 @@ class SiteRepository @Inject constructor(
             try {
                 val result = router.spider(site).detailContent(listOf(vodId))
                 val elapsedMs = System.currentTimeMillis() - startedAtMs
-                if (result.list.isNotEmpty() || !shouldRetryEmptyDetail(site, elapsedMs, attempt, maxAttempts)) {
+                if (hasPlayableDetail(result) || !shouldRetryEmptyDetail(site, elapsedMs, attempt, maxAttempts)) {
                     return@withContext result
                 }
                 delay(500L * attempt)

@@ -1,13 +1,26 @@
 package com.mewbox.tv.ui.setting
 
+import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.fongmi.nodejs.NodeClient
 import com.mewbox.tv.api.config.SettingsRepository
+import com.mewbox.tv.api.config.SubscriptionCoordinator
 import com.mewbox.tv.api.config.VodConfig
+import com.mewbox.tv.api.tmdb.TmdbClient
+import com.mewbox.tv.api.tmdb.TmdbRepository
+import com.mewbox.tv.bean.Config
 import com.mewbox.tv.bean.Site
+import com.mewbox.tv.bean.TmdbConfig
 import com.mewbox.tv.catvod.SpiderRouter
+import com.mewbox.tv.db.ConfigDao
 import com.mewbox.tv.db.SiteDao
+import com.mewbox.tv.engine.nodejs.NodeRuntime
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -15,25 +28,9 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import javax.inject.Inject
-
-import android.content.Context
-import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.Dispatchers
 import java.io.File
 import java.util.Locale
-
-import com.mewbox.tv.bean.Config
-import com.mewbox.tv.db.ConfigDao
-import com.mewbox.tv.db.HistoryDao
-import kotlinx.coroutines.flow.first
-
-import com.mewbox.tv.api.tmdb.TmdbClient
-import com.mewbox.tv.bean.TmdbConfig
-import com.mewbox.tv.api.tmdb.TmdbRepository
-import com.fongmi.nodejs.NodeBundle
-import com.fongmi.nodejs.NodeClient
-import com.mewbox.tv.engine.nodejs.NodeRuntime
+import javax.inject.Inject
 
 data class SiteItem(val site: Site, val supported: Boolean)
 
@@ -58,8 +55,8 @@ class SettingsViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     siteDao: SiteDao,
     private val configDao: ConfigDao,
-    private val historyDao: HistoryDao,
     private val vodConfig: VodConfig,
+    private val coordinator: SubscriptionCoordinator,
     private val settings: SettingsRepository,
     private val router: SpiderRouter,
     private val tmdbRepository: TmdbRepository,
@@ -81,10 +78,7 @@ class SettingsViewModel @Inject constructor(
         sanitizeConfigNames()
     }
 
-    /**
-     * 清理早期版本自动写入的「订阅 N」占位名。
-     * 名称留空即可，展示层会自动以订阅链接作为订阅名称。
-     */
+    /** 清理早期版本自动写入的「订阅 N」占位名。 */
     private fun sanitizeConfigNames() {
         viewModelScope.launch(Dispatchers.IO) {
             configDao.getAll()
@@ -139,66 +133,64 @@ class SettingsViewModel @Inject constructor(
         replaceUrl: String = "",
     ) {
         if (transient.value.importing) return
-        // Node.js 源（订阅以 index.js.md5 结尾）的下载与启动由全局 loading 统一提示，这里不再叠遮罩
-        val nodeSource = NodeBundle.isConfig(input)
+        val nodeSource = coordinator.isNodeSource(input)
         viewModelScope.launch {
             transient.value = Transient(importing = true, showOverlay = !nodeSource)
             transient.value = try {
-                // import 正常返回即 Node.js 已启动成功（client.load 阻塞到服务就绪），此时才允许跳首页
-                val count = vodConfig.import(input, name, configId = configId, replaceUrl = replaceUrl)
-                val msg = if (count == 0) "已导入网页订阅源" else "导入成功：$count 个站点"
-                Transient(
-                    message = msg,
-                    pendingHomeNav = true,
-                )
+                val result = coordinator.switchConfig(input, name, configId, replaceUrl)
+                when (result) {
+                    is SubscriptionCoordinator.ActionResult.Imported -> Transient(
+                        message = result.message,
+                        pendingHomeNav = true,
+                    )
+                    is SubscriptionCoordinator.ActionResult.Renamed -> Transient(message = result.message)
+                    SubscriptionCoordinator.ActionResult.NoOp -> Transient()
+                }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                // 返回键手动打断不算失败：提示取消，留在设置页方便换一个订阅源重试
                 val msg = if (NodeClient.isInterrupted(e)) "已取消导入" else "导入失败：${NodeRuntime.describe(e)}"
                 Transient(message = msg)
             }
         }
     }
 
-    fun saveConfig(url: String, name: String, isEdit: Boolean, oldUrl: String) {
-        val targetUrl = url.trim()
-        val targetName = name.trim()
-        if (targetUrl.isEmpty()) return
+    fun saveConfig(
+        url: String,
+        name: String,
+        pickedUri: Uri? = null,
+        isEdit: Boolean = false,
+        oldUrl: String = "",
+    ) {
+        if (transient.value.importing) return
+        if (pickedUri == null && url.trim().isEmpty()) return
+        val nodeSource = coordinator.isNodeSource(url, pickedUri)
+        val showOverlay = pickedUri == null && !nodeSource && !(isEdit && oldUrl.trim() == url.trim())
 
         viewModelScope.launch {
-            if (isEdit && oldUrl == targetUrl) {
-                // 编辑同一地址时以输入为准：留空即清除名称，展示回退到订阅链接
-                configDao.updateName(targetUrl, targetName)
-                transient.update {
-                    it.copy(message = if (targetName.isBlank()) "已清除名称，将使用订阅链接" else "订阅名称已更新")
+            transient.value = Transient(importing = true, showOverlay = showOverlay)
+            transient.value = try {
+                when (val result = coordinator.saveConfig(url, name, pickedUri, isEdit, oldUrl)) {
+                    is SubscriptionCoordinator.ActionResult.Imported -> Transient(
+                        message = result.message,
+                        pendingHomeNav = true,
+                    )
+                    is SubscriptionCoordinator.ActionResult.Renamed -> Transient(message = result.message)
+                    SubscriptionCoordinator.ActionResult.NoOp -> Transient()
                 }
-            } else {
-                val oldConfig = if (isEdit && oldUrl.isNotEmpty()) configDao.find(oldUrl) else null
-                val existing = configDao.find(targetUrl)
-                val finalName = when {
-                    targetName.isNotBlank() -> targetName
-                    else -> existing?.name ?: oldConfig?.name.orEmpty()
-                }
-                import(
-                    input = targetUrl,
-                    name = finalName,
-                    configId = oldConfig?.id.orEmpty(),
-                    replaceUrl = if (isEdit && oldUrl != targetUrl) oldUrl else "",
-                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val msg = if (NodeClient.isInterrupted(e)) "已取消导入" else "导入失败：${NodeRuntime.describe(e)}"
+                Transient(message = msg)
             }
         }
     }
 
     fun deleteConfig(url: String) {
         viewModelScope.launch {
-            // 当前激活订阅不可删除（历史弹窗已过滤展示，这里兜底防误删）
-            if (settings.configUrlFlow.first() == url) {
-                transient.update { it.copy(message = "当前激活的订阅不可删除") }
-                return@launch
-            }
-            val config = configDao.find(url)
-            configDao.delete(url)
-            if (config != null && config.id.isNotBlank()) {
-                historyDao.clearWithTracksByConfig(config.id)
+            coordinator.deleteConfig(url)?.let { err ->
+                transient.update { it.copy(message = err) }
             }
         }
     }
@@ -215,6 +207,7 @@ class SettingsViewModel @Inject constructor(
             vodConfig.update(site.copy(searchable = if (site.searchable == 1) 2 else 1))
         }
     }
+
     fun setHome(site: Site) = viewModelScope.launch { vodConfig.setHome(site.key) }
 
     fun saveTmdbConfig(config: TmdbConfig) = viewModelScope.launch {
@@ -244,16 +237,13 @@ class SettingsViewModel @Inject constructor(
 
     fun consumeMessage() = transient.update { it.copy(message = null) }
 
-    /** 跳回首页后由 UI 消费，避免重复触发 */
     fun consumePendingHomeNav() = transient.update { it.copy(pendingHomeNav = false) }
 }
 
 private fun calculateCacheSize(context: Context): Long {
     var size = 0L
     size += getDirectorySize(context.cacheDir)
-    context.externalCacheDir?.let {
-        size += getDirectorySize(it)
-    }
+    context.externalCacheDir?.let { size += getDirectorySize(it) }
     return size
 }
 

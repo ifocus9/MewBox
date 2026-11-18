@@ -1,5 +1,9 @@
 package com.mewbox.tv.ui.home
 
+import com.mewbox.tv.ui.components.MewOverlayVariant
+import com.mewbox.tv.ui.components.MewSheetShell
+import com.mewbox.tv.ui.components.OverlayTokens
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -47,15 +51,14 @@ fun TypeSheetDialog(
     onReset: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        containerColor = MaterialTheme.colorScheme.surface,
-    ) {
+    MewSheetShell(
+        onDismiss = onDismiss,
+        variant = MewOverlayVariant.Light,
+    ) { focusModifier ->
         Column(
-            modifier = Modifier
+            modifier = focusModifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 8.dp)
+                .padding(horizontal = OverlayTokens.Padding, vertical = 8.dp)
                 .navigationBarsPadding(),
         ) {
             Row(

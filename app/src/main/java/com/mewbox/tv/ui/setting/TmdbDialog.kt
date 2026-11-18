@@ -1,5 +1,9 @@
 package com.mewbox.tv.ui.setting
 
+import com.mewbox.tv.ui.components.MewDialogShell
+import com.mewbox.tv.ui.components.MewDialogSpec
+import com.mewbox.tv.ui.components.OverlayTokens
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -53,9 +57,9 @@ import androidx.compose.ui.window.DialogProperties
 import com.mewbox.tv.bean.TmdbConfig
 import kotlinx.coroutines.launch
 
-private val BluePrimary = Color(0xFF217AF4)
-private val DialogOutlinedBg = Color(0xFFF2F4F7)
-private val DialogOutlinedText = Color(0xFF4E5564)
+private val BluePrimary = OverlayTokens.Accent
+private val DialogOutlinedBg = OverlayTokens.ItemBg
+private val DialogOutlinedText = OverlayTokens.OutlinedText
 
 private enum class TestState {
     None, Testing, Success, Error
@@ -85,23 +89,15 @@ fun TmdbDialog(
 
     val scope = rememberCoroutineScope()
 
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
+    MewDialogShell(
+        onDismiss = onDismiss,
+        spec = MewDialogSpec.Compact,
     ) {
-        Surface(
+        Column(
             modifier = Modifier
-                .fillMaxWidth(0.92f)
-                .widthIn(max = 440.dp),
-            shape = RoundedCornerShape(18.dp),
-            color = Color.White,
-            shadowElevation = 8.dp,
+                .padding(OverlayTokens.Padding)
+                .verticalScroll(rememberScrollState()),
         ) {
-            Column(
-                modifier = Modifier
-                    .padding(20.dp)
-                    .verticalScroll(rememberScrollState()),
-            ) {
                 // 标题
                 Text(
                     text = "TMDB 设置",
@@ -420,5 +416,4 @@ fun TmdbDialog(
                 }
             }
         }
-    }
 }

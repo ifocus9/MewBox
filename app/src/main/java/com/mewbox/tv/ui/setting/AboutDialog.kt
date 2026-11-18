@@ -1,5 +1,9 @@
 package com.mewbox.tv.ui.setting
 
+import com.mewbox.tv.ui.components.MewDialogShell
+import com.mewbox.tv.ui.components.MewDialogSpec
+import com.mewbox.tv.ui.components.OverlayTokens
+
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -25,21 +29,13 @@ import com.mewbox.tv.BuildConfig
 fun AboutDialog(
     onDismiss: () -> Unit,
 ) {
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
+    MewDialogShell(
+        onDismiss = onDismiss,
+        spec = MewDialogSpec.Compact,
     ) {
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth(0.85f)
-                .widthIn(max = 400.dp),
-            shape = RoundedCornerShape(18.dp),
-            color = Color.White,
-            shadowElevation = 8.dp,
+        Column(
+            modifier = Modifier.padding(OverlayTokens.Padding),
         ) {
-            Column(
-                modifier = Modifier.padding(20.dp),
-            ) {
                 Text(
                     text = "关于",
                     fontSize = 20.sp,
@@ -73,5 +69,4 @@ fun AboutDialog(
                 )
             }
         }
-    }
 }

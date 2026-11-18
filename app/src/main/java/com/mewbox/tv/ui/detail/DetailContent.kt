@@ -84,6 +84,7 @@ fun DetailContent(
                 tmdbDetail = tmdbDetail,
                 tmdbImageBase = tmdbImageBase,
                 resumeEpisodeText = resumeEpisodeText,
+                hasPlayableRoutes = flags.any { it.episodes.isNotEmpty() },
                 onPlay = onPlay,
                 quickBackdrop = quickBackdrop,
                 quickPoster = quickPoster,

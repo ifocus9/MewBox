@@ -106,6 +106,7 @@ internal fun PlayerControlsOverlay(
     hasPrevEpisode: Boolean,
     hasNextEpisode: Boolean,
     hasMultiQuality: Boolean = false,
+    currentQualityName: String = "画质",
     onBack: () -> Unit,
     onShowMediaInfo: () -> Unit,
     onPlayPauseToggle: () -> Unit,
@@ -116,6 +117,7 @@ internal fun PlayerControlsOverlay(
     onShowSubtitleTracks: () -> Unit = {},
     onShowAudioTracks: () -> Unit = {},
     onShowVideoTracks: () -> Unit = {},
+    onShowQuality: () -> Unit = {},
     onLockScreen: () -> Unit,
     onOpenEpisodeDrawer: () -> Unit,
     opening: Long = 0L,
@@ -131,6 +133,7 @@ internal fun PlayerControlsOverlay(
     // hasPrevEpisode / hasNextEpisode 由 DetailEpisodeNav 按当前线路 + 正倒序算出，
     // 两者皆 false ⟺ 该线路只有一集（或无剧集），与选集抽屉的数据源一致，无需额外透传剧集列表。
     val showEpisodeControls = hasPrevEpisode || hasNextEpisode
+    val hasMultiFlags = vod.playFlags.size > 1
     AnimatedVisibility(
         visible = visible,
         enter = fadeIn(),
@@ -223,13 +226,17 @@ internal fun PlayerControlsOverlay(
                 currentPosition = playerState.currentPosition,
                 bufferedPosition = playerState.bufferedPosition,
                 isLandscape = isLandscape,
-                showEpisodeControls = showEpisodeControls || vod.playFlags.size > 1 || hasMultiQuality,
+                showEpisodeControls = showEpisodeControls,
+                hasMultiFlags = hasMultiFlags,
+                hasMultiQuality = hasMultiQuality,
+                currentQualityName = currentQualityName,
                 externalSeekPosition = externalSeekPosition,
                 onSeekTo = onSeekTo,
                 onRefreshPlayback = onRefreshPlayback,
                 onShowSubtitleTracks = onShowSubtitleTracks,
                 onShowAudioTracks = onShowAudioTracks,
                 onShowVideoTracks = onShowVideoTracks,
+                onShowQuality = onShowQuality,
                 onOpenEpisodeDrawer = onOpenEpisodeDrawer,
                 opening = opening,
                 ending = ending,
@@ -432,12 +439,16 @@ private fun PlayerBottomBar(
     bufferedPosition: Long,
     isLandscape: Boolean = true,
     showEpisodeControls: Boolean = true,
+    hasMultiFlags: Boolean = false,
+    hasMultiQuality: Boolean = false,
+    currentQualityName: String = "画质",
     externalSeekPosition: Long?,
     onSeekTo: (Long) -> Unit,
     onRefreshPlayback: () -> Unit = {},
     onShowSubtitleTracks: () -> Unit = {},
     onShowAudioTracks: () -> Unit = {},
     onShowVideoTracks: () -> Unit = {},
+    onShowQuality: () -> Unit = {},
     onOpenEpisodeDrawer: () -> Unit,
     opening: Long = 0L,
     ending: Long = 0L,
@@ -584,10 +595,15 @@ private fun PlayerBottomBar(
                     onClick = onSetEnding,
                     onLongClick = onResetEnding,
                 )
-                // 单集（含电影）时选集抽屉无可切换内容，隐藏「选集」入口
-                if (showEpisodeControls) {
+                if (hasMultiQuality) {
                     PlayerQuickActionButton(
-                        text = "选集",
+                        text = currentQualityName,
+                        onClick = onShowQuality,
+                    )
+                }
+                if (showEpisodeControls || hasMultiFlags) {
+                    PlayerQuickActionButton(
+                        text = if (showEpisodeControls) "选集" else "线路",
                         onClick = onOpenEpisodeDrawer,
                     )
                 }
