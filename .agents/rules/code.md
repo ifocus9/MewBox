@@ -7,7 +7,7 @@ trigger: always_on
 ## 一、通用基本原则
 
 1. **权威与技术标准**：基于 Android 现代技术栈（Kotlin、Jetpack Compose、Media3、Hilt、Coroutines/Flow、Room、Kotlinx Serialization）。优先遵循官方文档 > 官方最佳实践 > 稳定版本文档；与官方指导冲突时以官方为准。
-2. **新增功能或者遇到功能bug优先参考 webhtv/TV**：增加当前项目没有的功能时，或者遇到源解析、T4/Node.js 接口协议、播放器嗅探与视频格式解析等问题或 Bug 时，**优先参考 [webhtv](D:\project\webhtv) 对应模块的成熟实现方式**。
+2. **新增功能或者遇到功能bug优先参考 webhtv/TV**：增加当前项目没有的功能时，或者遇到源解析、T4/Node.js 接口协议、播放器嗅探与视频格式解析等问题或 Bug 时，**优先参考 [webhtv](D:\project\webhtv)、【AVBox】(D:\project\AVBox) 对应模块的成熟实现方式**。
 3. **64 位架构硬约束**：**所有功能只考虑 64 位（`arm64-v8a`），不考虑 32 位**；严禁引入 32 位（`armeabi-v7a`、`x86`）相关的包或 Native 库，NDK 过滤始终维持 `ndk { abiFilters += "arm64-v8a" }`。
 4. **高内聚、低耦合**：代码编写必须严格遵循单一职责原则，**严禁将所有功能堆砌在单个文件中**（坚决避免 God Class 与超长 Composable）；合理拆分领域逻辑、数据流、UI 组件与 ViewModel。
 5. **不做多语言**：项目专注于中文交互，**界面文本直接使用标准中文维护**，不做多语言资源抽取或国际化抽象。
@@ -22,6 +22,7 @@ trigger: always_on
 10. **配套nodejs源项目：D:\project\CatPawOpen\nodejs**：遇到问题，优先适配和排查。
 11. **本项目是纯正nodejs源播放器**：移植其他项目的功能是必须优先考虑这一点，按当前项目的实际情况做移植。
 12. **优先使用全局已有的组件和配色方案**：新功能模块尽量使用全局封装好的组件和全局定义的颜色，保持全局UI规范统一
+13. Avoid unnecessary secondary labels and descriptions. Let the layout do the explaining
 
 ---
 

@@ -11,6 +11,7 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
+import androidx.media3.common.util.StuckPlayerException
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
@@ -135,8 +136,12 @@ class Players @Inject constructor(
             experimentalSetEnableMediaCodecVideoRendererPrewarming(true)
         }
 
+        // Media3 1.9+ 默认开启 WAKE_MODE_LOCAL，但 MewBox 前台全屏已由 FLAG_KEEP_SCREEN_ON 保活且未申请 WAKE_LOCK；
+        // 默认 10 秒卡死熔断对网盘 4K Remux 抖动及 HttpEofRecoveryDataSource 断点重连偏紧，适度放宽至 20 秒。
         val player = ExoPlayer.Builder(context, renderersFactory)
             .setLoadControl(loadControl)
+            .setWakeMode(C.WAKE_MODE_NONE)
+            .setStuckPlayingDetectionTimeoutMs(STUCK_PLAYING_DETECTION_TIMEOUT_MS)
             .build()
         // 关键优化（对齐主流网络播放器与 FongMi）：启用 CLOSEST_SYNC 关键帧吸附寻道。
         // 彻底解决高码率 4K/1080p 网盘长 GOP 视频在进度条快进或历史进度起播时，
@@ -242,9 +247,20 @@ class Players @Inject constructor(
                 updateTracks(exoPlayer.currentTracks)
             }
 
+            @OptIn(UnstableApi::class)
             override fun onPlayerError(error: PlaybackException) {
-                Timber.e(error, "ExoPlayer 播放异常")
-                val friendlyMessage = getFriendlyErrorMessage(error)
+                val stuck = findStuckPlayerException(error)
+                if (stuck != null) {
+                    Timber.e(
+                        error,
+                        "ExoPlayer 播放卡死熔断: stuckType=%d, timeoutMs=%d",
+                        stuck.stuckType,
+                        stuck.timeoutMs,
+                    )
+                } else {
+                    Timber.e(error, "ExoPlayer 播放异常")
+                }
+                val friendlyMessage = resolveFriendlyErrorMessage(error)
 
                 // 若发生音频解码器初始化失败或不支持，且当前设置了音轨 override，自动恢复系统自适应音轨
                 if ((error.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
@@ -277,28 +293,6 @@ class Players @Inject constructor(
                 com.mewbox.tv.util.AppToast.show(friendlyMessage)
             }
         })
-    }
-
-    /**
-     * 将 ExoPlayer 异常映射为标准中文可读提示（参考 TV ExoErrorMessageProvider）
-     */
-    private fun getFriendlyErrorMessage(error: PlaybackException): String {
-        return when (error.errorCode) {
-            PlaybackException.ERROR_CODE_DECODER_INIT_FAILED -> "解码器初始化失败（当前设备不支持该音视频格式）"
-            PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED -> "当前设备不支持该音视频编码格式"
-            PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED -> "查询设备解码器失败"
-            PlaybackException.ERROR_CODE_DECODING_FAILED -> "音视频解码失败"
-            PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED -> "音频输出轨道初始化失败"
-            PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED -> "音频数据写入失败"
-            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED -> "网络连接失败，请检查网络"
-            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> "网络连接超时"
-            PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "媒体资源请求失败 (${error.message ?: error.errorCodeName})"
-            PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED -> "不支持的视频封装格式（如 ISO 原盘镜像等）"
-            PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED -> "视频封装格式损坏"
-            PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED -> "视频播放列表解析错误"
-            PlaybackException.ERROR_CODE_TIMEOUT -> "播放响应超时"
-            else -> error.localizedMessage?.takeIf { it.isNotBlank() } ?: "播放错误 (${error.errorCodeName})"
-        }
     }
 
     /**
@@ -809,6 +803,52 @@ class Players @Inject constructor(
         internal const val BUFFER_FOR_PLAYBACK_MS = 1_000
         internal const val BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 5_000
         internal const val BACK_BUFFER_DURATION_MS = 0
+        internal const val STUCK_PLAYING_DETECTION_TIMEOUT_MS = 20_000
+
+        @OptIn(UnstableApi::class)
+        internal fun findStuckPlayerException(error: Throwable?): StuckPlayerException? {
+            var current: Throwable? = error
+            var depth = 0
+            while (current != null && depth < 8) {
+                if (current is StuckPlayerException) {
+                    return current
+                }
+                val next = current.cause
+                if (next === current) break
+                current = next
+                depth++
+            }
+            return null
+        }
+
+        /**
+         * 将 ExoPlayer 异常映射为标准中文可读提示（参考 TV ExoErrorMessageProvider）
+         */
+        @OptIn(UnstableApi::class)
+        internal fun resolveFriendlyErrorMessage(error: PlaybackException): String {
+            return when (error.errorCode) {
+                PlaybackException.ERROR_CODE_DECODER_INIT_FAILED -> "解码器初始化失败（当前设备不支持该音视频格式）"
+                PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED -> "当前设备不支持该音视频编码格式"
+                PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED -> "查询设备解码器失败"
+                PlaybackException.ERROR_CODE_DECODING_FAILED -> "音视频解码失败"
+                PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED -> "音频输出轨道初始化失败"
+                PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED -> "音频数据写入失败"
+                PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED -> "网络连接失败，请检查网络"
+                PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> "网络连接超时"
+                PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "媒体资源请求失败 (${error.message ?: error.errorCodeName})"
+                PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED -> "不支持的视频封装格式（如 ISO 原盘镜像等）"
+                PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED -> "视频封装格式损坏"
+                PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED -> "视频播放列表解析错误"
+                PlaybackException.ERROR_CODE_TIMEOUT -> when (findStuckPlayerException(error)?.stuckType) {
+                    StuckPlayerException.STUCK_PLAYING_NO_PROGRESS -> "播放画面卡住无响应，请刷新或切换线路"
+                    StuckPlayerException.STUCK_BUFFERING_NO_PROGRESS,
+                    StuckPlayerException.STUCK_BUFFERING_NOT_LOADING -> "缓冲长时间无进展，请刷新或切换线路"
+                    null -> "播放响应超时"
+                    else -> "播放状态异常停滞，请刷新重试"
+                }
+                else -> error.localizedMessage?.takeIf { it.isNotBlank() } ?: "播放错误 (${error.errorCodeName})"
+            }
+        }
 
         /**
          * 停止播放后重置单次会话状态，保留用户偏好的倍速与画面拉伸模式，

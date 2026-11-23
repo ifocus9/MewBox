@@ -8,7 +8,6 @@ import android.util.Log
 import androidx.media3.common.C
 import androidx.media3.common.Format
 import androidx.media3.common.MimeTypes
-import androidx.media3.common.util.CodecSpecificDataUtil
 import androidx.media3.common.util.TraceUtil
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.util.Util
@@ -122,10 +121,10 @@ internal class CompatFfmpegAudioRenderer(
 
     private fun isSystemDecoderSupported(format: Format): Boolean {
         val sampleMimeType = format.sampleMimeType ?: return false
-        if (context == null) return false
+        val ctx = context ?: return false
         return try {
             MediaCodecSelector.DEFAULT.getDecoderInfos(sampleMimeType, false, false).any { info ->
-                info.isFormatSupported(format)
+                info.isFormatSupported(ctx, format)
             }
         } catch (_: MediaCodecUtil.DecoderQueryException) {
             false
@@ -137,7 +136,11 @@ internal class CompatFfmpegAudioRenderer(
         if (!sinkSupportsFormat(pcmFormat)) return false
 
         if (format.sampleRate <= 0 || channelCount <= 0) return true
-        val channelConfig = Util.getAudioTrackChannelConfig(channelCount)
+        val channelConfig = resolveAudioTrackChannelConfig(
+            sourceChannelCount = format.channelCount,
+            sourceChannelMask = format.channelMask,
+            targetChannelCount = channelCount,
+        )
         if (channelConfig == AudioFormat.CHANNEL_INVALID) return false
         return try {
             AudioTrack.getMinBufferSize(format.sampleRate, channelConfig, pcmEncoding) != AudioTrack.ERROR_BAD_VALUE
@@ -183,24 +186,23 @@ internal class CompatFfmpegAudioRenderer(
                 return format.buildUpon().setSampleMimeType(MIME_AUDIO_AV3A).build()
             }
             if (sampleMimeType == MimeTypes.AUDIO_ALAC && format.initializationData.isNotEmpty()) {
-                try {
-                    val rawData = format.initializationData[0]
-                    val initializationData = normalizeAlacInitializationData(rawData)
-                    val config = CodecSpecificDataUtil.parseAlacAudioSpecificConfig(initializationData)
-                    val builder = format.buildUpon()
-                    if (format.sampleRate == Format.NO_VALUE && config.first != null && config.first > 0) {
-                        builder.setSampleRate(config.first)
+                val rawData = format.initializationData[0]
+                val initializationData = normalizeAlacInitializationData(rawData)
+                val parsed = parseAlacAudioSpecificConfig(initializationData)
+                val builder = format.buildUpon()
+                if (parsed != null) {
+                    val (sampleRate, channelCount) = parsed
+                    if (format.sampleRate == Format.NO_VALUE) {
+                        builder.setSampleRate(sampleRate)
                     }
-                    if (format.channelCount == Format.NO_VALUE && config.second != null && config.second > 0) {
-                        builder.setChannelCount(config.second)
+                    if (format.channelCount == Format.NO_VALUE) {
+                        builder.setChannelCount(channelCount)
                     }
-                    if (initializationData !== rawData) {
-                        builder.setInitializationData(listOf(initializationData))
-                    }
-                    return builder.build()
-                } catch (_: RuntimeException) {
-                    // Keep the original format; the decoder will report malformed ALAC data.
                 }
+                if (initializationData !== rawData) {
+                    builder.setInitializationData(listOf(initializationData))
+                }
+                return builder.build()
             }
             return format
         }
@@ -224,6 +226,27 @@ internal class CompatFfmpegAudioRenderer(
             if (sourceSupported) return sourceChannelCount
             if (sourceChannelCount > STEREO_CHANNEL_COUNT && stereoSupported) return STEREO_CHANNEL_COUNT
             return Format.NO_VALUE
+        }
+
+        @JvmStatic
+        internal fun resolveAudioTrackChannelConfig(
+            sourceChannelCount: Int,
+            sourceChannelMask: Int,
+            targetChannelCount: Int,
+        ): Int {
+            // Only reuse Format.channelMask when probing the source channel layout; downmix stereo probes must derive stereo mask.
+            if (targetChannelCount == sourceChannelCount && sourceChannelMask != Format.NO_VALUE) {
+                return sourceChannelMask
+            }
+            return Util.getAudioTrackChannelConfig(targetChannelCount)
+        }
+
+        private fun parseAlacAudioSpecificConfig(data: ByteArray): Pair<Int, Int>? {
+            if (data.size < 24) return null
+            val channelCount = data[9].toInt() and 0xFF
+            val sampleRate = readInt(data, 20)
+            if (sampleRate <= 0 || channelCount <= 0) return null
+            return sampleRate to channelCount
         }
 
         private fun readInt(data: ByteArray, offset: Int): Int {

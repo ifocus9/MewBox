@@ -22,6 +22,7 @@ trigger: always_on
 10. **配套nodejs源项目：D:\project\CatPawOpen\nodejs**：遇到问题，优先适配和排查。
 11. **本项目是纯正nodejs源播放器**：移植其他项目的功能是必须优先考虑这一点，按当前项目的实际情况做移植。
 12. **优先使用全局已有的组件和配色方案**：新功能模块尽量使用全局封装好的组件和全局定义的颜色，保持全局UI规范统一
+13. Avoid unnecessary secondary labels and descriptions. Let the layout do the explaining
 
 ---
 

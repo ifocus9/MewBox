@@ -140,13 +140,6 @@ internal fun PlayerMediaInfoDialog(
                         ),
                 )
             }
-
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                text = "点击或长按条目即可复制",
-                fontSize = 12.sp,
-                color = Color(0x80FFFFFF),
-            )
         }
     }
 }

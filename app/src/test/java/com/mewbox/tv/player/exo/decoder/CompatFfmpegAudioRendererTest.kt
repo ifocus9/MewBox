@@ -1,8 +1,10 @@
 package com.mewbox.tv.player.exo.decoder
 
+import android.media.AudioFormat
 import androidx.media3.common.Format
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.common.util.Util
 import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.CompatFfmpegAudioRenderer
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -88,6 +90,73 @@ class CompatFfmpegAudioRendererTest {
     fun alacInitializationData_keepsMagicCookie() {
         val cookie = ByteArray(24)
         assertArrayEquals(cookie, CompatFfmpegAudioRenderer.normalizeAlacInitializationData(cookie))
+    }
+
+    @Test
+    fun normalizeDecodeFormat_parsesAlacCookieAndFullAtom() {
+        val cookie = ByteArray(24).apply {
+            this[5] = 24
+            this[9] = 6
+            // 48_000 Hz in big-endian at bytes 20..23
+            this[22] = 0xBB.toByte()
+            this[23] = 0x80.toByte()
+        }
+        val fromCookie = CompatFfmpegAudioRenderer.normalizeDecodeFormat(
+            Format.Builder()
+                .setSampleMimeType(MimeTypes.AUDIO_ALAC)
+                .setInitializationData(listOf(cookie))
+                .build(),
+        )
+        assertEquals(48_000, fromCookie.sampleRate)
+        assertEquals(6, fromCookie.channelCount)
+        assertArrayEquals(cookie, fromCookie.initializationData[0])
+
+        val fullAtom = ByteArray(36).apply {
+            this[3] = 36
+            this[4] = 'a'.code.toByte()
+            this[5] = 'l'.code.toByte()
+            this[6] = 'a'.code.toByte()
+            this[7] = 'c'.code.toByte()
+            System.arraycopy(cookie, 0, this, 12, cookie.size)
+        }
+        val fromAtom = CompatFfmpegAudioRenderer.normalizeDecodeFormat(
+            Format.Builder()
+                .setSampleMimeType(MimeTypes.AUDIO_ALAC)
+                .setInitializationData(listOf(fullAtom))
+                .build(),
+        )
+        assertEquals(48_000, fromAtom.sampleRate)
+        assertEquals(6, fromAtom.channelCount)
+        assertArrayEquals(cookie, fromAtom.initializationData[0])
+    }
+
+    @Test
+    fun resolveAudioTrackChannelConfig_preservesSourceMaskOnlyForSourceProbe() {
+        val sourceMask = AudioFormat.CHANNEL_OUT_7POINT1_SURROUND
+        assertEquals(
+            sourceMask,
+            CompatFfmpegAudioRenderer.resolveAudioTrackChannelConfig(
+                sourceChannelCount = 8,
+                sourceChannelMask = sourceMask,
+                targetChannelCount = 8,
+            ),
+        )
+        assertEquals(
+            AudioFormat.CHANNEL_OUT_STEREO,
+            CompatFfmpegAudioRenderer.resolveAudioTrackChannelConfig(
+                sourceChannelCount = 8,
+                sourceChannelMask = sourceMask,
+                targetChannelCount = CompatFfmpegAudioRenderer.STEREO_CHANNEL_COUNT,
+            ),
+        )
+        assertEquals(
+            Util.getAudioTrackChannelConfig(6),
+            CompatFfmpegAudioRenderer.resolveAudioTrackChannelConfig(
+                sourceChannelCount = 6,
+                sourceChannelMask = Format.NO_VALUE,
+                targetChannelCount = 6,
+            ),
+        )
     }
 }
 

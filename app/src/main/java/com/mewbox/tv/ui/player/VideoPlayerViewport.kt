@@ -57,8 +57,9 @@ private const val GESTURE_SEEK_FULL_SWIPE_MS = 90_000L
 /** 长按屏幕时的临时倍速 */
 private const val LONG_PRESS_BOOST_SPEED = 3.0f
 
-/** 双指缩放倍率范围：以画面中心为锚点放大，1x 为原始画面；放大为纹理插值，不提升清晰度 */
-private const val MIN_ZOOM_SCALE = 1f
+/** 双指缩放倍率范围：以画面中心为锚点缩放，1x 为原始画面；支持小幅缩小以避让超宽画幅的屏幕圆角/挖孔 */
+private const val DEFAULT_ZOOM_SCALE = 1f
+private const val MIN_ZOOM_SCALE = 0.75f
 private const val MAX_ZOOM_SCALE = 4f
 
 /**
@@ -217,11 +218,11 @@ fun VideoPlayerViewport(
     // 双指缩放：纯播放会话内状态，不落 DataStore、不跨集保持。
     // 换源 / 换集（播放地址或集名变化）时倍率与手势基准一并复位到 1x，
     // 避免上一集的放大倍率被带到下一集，也避免手势进行中换集留下脏基准。
-    var zoomScale by remember { mutableFloatStateOf(MIN_ZOOM_SCALE) }
-    var zoomGestureBase by remember { mutableFloatStateOf(MIN_ZOOM_SCALE) }
+    var zoomScale by remember { mutableFloatStateOf(DEFAULT_ZOOM_SCALE) }
+    var zoomGestureBase by remember { mutableFloatStateOf(DEFAULT_ZOOM_SCALE) }
     LaunchedEffect(playerState.playUrl, currentEpisodeName) {
-        zoomScale = MIN_ZOOM_SCALE
-        zoomGestureBase = MIN_ZOOM_SCALE
+        zoomScale = DEFAULT_ZOOM_SCALE
+        zoomGestureBase = DEFAULT_ZOOM_SCALE
     }
 
     // 组件被回收或离开播放页面时，确保恢复倍速
@@ -335,7 +336,7 @@ fun VideoPlayerViewport(
                     val windowH = pv.height.toFloat()
                     val textBottom = (windowH - h) / 2f + SUBTITLE_TEXT_BOTTOM_FRACTION * h
                     val maxShift = (windowH - safePx - textBottom).coerceAtLeast(0f)
-                    val desiredShift = (zoomScale - 1f) * 0.5f * h
+                    val desiredShift = ((zoomScale - 1f) * 0.5f * h).coerceAtLeast(0f)
                     subView.translationY = minOf(desiredShift, maxShift) / zoomScale
                     if (isLandscape) {
                         subView.setFractionalTextSize(SubtitleView.DEFAULT_TEXT_SIZE_FRACTION)

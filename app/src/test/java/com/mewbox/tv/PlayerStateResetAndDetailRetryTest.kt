@@ -1,6 +1,10 @@
 package com.mewbox.tv
 
+import androidx.annotation.OptIn
 import androidx.media3.common.C
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.util.StuckPlayerException
+import androidx.media3.common.util.UnstableApi
 import com.mewbox.tv.bean.Episode
 import com.mewbox.tv.bean.Flag
 import com.mewbox.tv.bean.Result
@@ -148,5 +152,40 @@ class PlayerStateResetAndDetailRetryTest {
             list = listOf(Vod(vodId = "openInternalWebsite", action = "openInternalWebsite")),
         )
         assertTrue(SiteRepository.hasPlayableDetail(actionItem))
+    }
+
+    @OptIn(UnstableApi::class)
+    @Test
+    fun players_resolveFriendlyErrorMessage_distinguishesStuckPlayerAndTimeout() {
+        val stuckPlaying = PlaybackException(
+            "Playback stuck",
+            RuntimeException(
+                "wrapper",
+                StuckPlayerException(StuckPlayerException.STUCK_PLAYING_NO_PROGRESS, 20_000),
+            ),
+            PlaybackException.ERROR_CODE_TIMEOUT,
+        )
+        assertEquals("播放画面卡住无响应，请刷新或切换线路", Players.resolveFriendlyErrorMessage(stuckPlaying))
+
+        val stuckBuffering = PlaybackException(
+            "Buffering stuck",
+            StuckPlayerException(StuckPlayerException.STUCK_BUFFERING_NO_PROGRESS, 600_000),
+            PlaybackException.ERROR_CODE_TIMEOUT,
+        )
+        assertEquals("缓冲长时间无进展，请刷新或切换线路", Players.resolveFriendlyErrorMessage(stuckBuffering))
+
+        val stuckNotEnding = PlaybackException(
+            "Not ending",
+            StuckPlayerException(StuckPlayerException.STUCK_PLAYING_NOT_ENDING, 60_000),
+            PlaybackException.ERROR_CODE_TIMEOUT,
+        )
+        assertEquals("播放状态异常停滞，请刷新重试", Players.resolveFriendlyErrorMessage(stuckNotEnding))
+
+        val plainTimeout = PlaybackException(
+            "Timeout",
+            null,
+            PlaybackException.ERROR_CODE_TIMEOUT,
+        )
+        assertEquals("播放响应超时", Players.resolveFriendlyErrorMessage(plainTimeout))
     }
 }

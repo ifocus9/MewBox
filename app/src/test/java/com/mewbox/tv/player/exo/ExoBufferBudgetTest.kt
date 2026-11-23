@@ -89,10 +89,24 @@ class ExoBufferBudgetTest {
         assertEquals(0L, loadControl.getBackBufferDurationUs(PlayerId.UNSET))
         assertFalse(loadControl.retainBackBufferFromKeyframe(PlayerId.UNSET))
 
-        val mediaPeriodId = androidx.media3.exoplayer.source.MediaSource.MediaPeriodId(Any())
+        val periodUid = Any()
+        val remoteTimeline = object : androidx.media3.common.Timeline() {
+            override fun getWindowCount(): Int = 1
+            override fun getWindow(windowIndex: Int, window: Window, defaultPositionProjectionUs: Long): Window {
+                window.mediaItem = androidx.media3.common.MediaItem.EMPTY
+                return window
+            }
+            override fun getPeriodCount(): Int = 1
+            override fun getPeriod(periodIndex: Int, period: Period, setIds: Boolean): Period =
+                period.set(null, if (setIds) periodUid else null, 0, androidx.media3.common.C.TIME_UNSET, 0L)
+            override fun getIndexOfPeriod(uid: Any): Int =
+                if (uid === periodUid) 0 else androidx.media3.common.C.INDEX_UNSET
+            override fun getUidOfPeriod(periodIndex: Int): Any = periodUid
+        }
+        val mediaPeriodId = androidx.media3.exoplayer.source.MediaSource.MediaPeriodId(periodUid)
         val paramsUnderMin = LoadControl.Parameters(
             PlayerId.UNSET,
-            androidx.media3.common.Timeline.EMPTY,
+            remoteTimeline,
             mediaPeriodId,
             0L,
             10_000_000L, // 10s < 50s minBufferMs
@@ -112,7 +126,7 @@ class ExoBufferBudgetTest {
         // 达到 120s maxBufferMs 后停止继续拉流
         val paramsAtMax = LoadControl.Parameters(
             PlayerId.UNSET,
-            androidx.media3.common.Timeline.EMPTY,
+            remoteTimeline,
             mediaPeriodId,
             0L,
             120_000_000L,
@@ -132,7 +146,7 @@ class ExoBufferBudgetTest {
             androidx.media3.exoplayer.source.TrackGroupArray.EMPTY,
             emptyArray(),
         )
-        tinyTargetControl.getAllocator().allocate()
+        tinyTargetControl.getAllocator(PlayerId.UNSET).allocate()
         assertFalse(tinyTargetControl.shouldContinueLoading(paramsUnderMin))
 
         loadControl.onReleased(PlayerId.UNSET)
