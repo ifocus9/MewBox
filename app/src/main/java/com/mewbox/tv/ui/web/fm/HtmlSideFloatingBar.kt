@@ -32,6 +32,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Explore
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -54,18 +55,14 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import com.mewbox.tv.ui.theme.MewBoxTheme
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
-private val HandleBlue = Color(0xFF0A7AFF)
-private val CompassBadgeBg = Color(0xFFE3F0FF)
-private val CapsuleTextPrimary = Color(0xFF1A1A1A)
-private val CapsuleBorder = Color(0x14000000)
-
 /**
  * HTML 源侧边悬浮控制条（视觉与交互对齐截图与 MewPlayer WebHomeChromeController）：
- * - 默认收起态：紧贴屏幕左侧边缘的蓝色圆角竖条（支持上下拖拽定位，点击展开）
- * - 展开态：白底圆角胶囊（浅蓝底指南针图标 + 当前订阅源名称）+ 右侧白底圆形刷新按钮
+ * - 默认收起态：紧贴屏幕左侧边缘的主色圆角竖条（支持上下拖拽定位，点击展开）
+ * - 展开态：白底圆角胶囊（浅主色底指南针图标 + 当前订阅源名称）+ 右侧白底圆形刷新按钮
  */
 @Composable
 fun HtmlSideFloatingBar(
@@ -151,7 +148,7 @@ fun HtmlSideFloatingBar(
                         .width(5.dp)
                         .height(40.dp)
                         .clip(RoundedCornerShape(topEnd = 5.dp, bottomEnd = 5.dp))
-                        .background(HandleBlue),
+                        .background(MaterialTheme.colorScheme.primary),
                 )
             }
 
@@ -189,16 +186,19 @@ fun HtmlSideFloatingBar(
                         .height(50.dp)
                         .padding(start = 4.dp, end = 12.dp),
                 ) {
-                    // 白色圆角订阅胶囊：[浅蓝底指南针图标 + 当前订阅名称]
+                    val cardBg = MewBoxTheme.colors.floatingCardBg
+                    val cardBorder = MewBoxTheme.colors.subtleBorder
+                    val textColor = MaterialTheme.colorScheme.onSurface
+                    // 圆角订阅胶囊：[主色容器底指南针图标 + 当前订阅名称]
                     Surface(
                         onClick = {
                             expanded = false
                             onSubscriptionClick()
                         },
                         shape = RoundedCornerShape(50),
-                        color = Color.White,
+                        color = cardBg,
                         shadowElevation = 4.dp,
-                        border = BorderStroke(0.5.dp, CapsuleBorder),
+                        border = BorderStroke(0.5.dp, cardBorder),
                         modifier = Modifier.height(38.dp),
                     ) {
                         Row(
@@ -210,12 +210,12 @@ fun HtmlSideFloatingBar(
                                 modifier = Modifier
                                     .size(26.dp)
                                     .clip(CircleShape)
-                                    .background(CompassBadgeBg),
+                                    .background(MaterialTheme.colorScheme.primaryContainer),
                             ) {
                                 Icon(
                                     imageVector = Icons.Rounded.Explore,
                                     contentDescription = "当前订阅",
-                                    tint = HandleBlue,
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
                                     modifier = Modifier.size(17.dp),
                                 )
                             }
@@ -224,7 +224,7 @@ fun HtmlSideFloatingBar(
                                 text = subscriptionName.ifBlank { "网页源" },
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = CapsuleTextPrimary,
+                                color = textColor,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.widthIn(max = 165.dp),
@@ -234,23 +234,23 @@ fun HtmlSideFloatingBar(
 
                     Spacer(modifier = Modifier.width(7.dp))
 
-                    // 右侧白色圆形刷新按钮
+                    // 右侧圆形刷新按钮
                     Surface(
                         onClick = {
                             expanded = false
                             onRefreshClick()
                         },
                         shape = CircleShape,
-                        color = Color.White,
+                        color = cardBg,
                         shadowElevation = 4.dp,
-                        border = BorderStroke(0.5.dp, CapsuleBorder),
+                        border = BorderStroke(0.5.dp, cardBorder),
                         modifier = Modifier.size(38.dp),
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
                                 imageVector = Icons.Rounded.Refresh,
                                 contentDescription = "刷新网页",
-                                tint = CapsuleTextPrimary,
+                                tint = textColor,
                                 modifier = Modifier.size(18.dp),
                             )
                         }

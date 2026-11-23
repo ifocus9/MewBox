@@ -278,11 +278,15 @@ internal fun SourceSection(
  * TMDB 演职员区（对齐 AVBox TmdbCastSection）
  */
 @Composable
-internal fun TmdbCastSection(cast: List<TmdbCastMember>, imageBase: String = "") {
+internal fun TmdbCastSection(
+    cast: List<TmdbCastMember>,
+    imageBase: String = "",
+    modifier: Modifier = Modifier,
+) {
     if (cast.isEmpty()) return
 
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(top = 16.dp),
     ) {
@@ -371,11 +375,14 @@ private fun TmdbCastItem(member: TmdbCastMember, imageBase: String) {
  * TMDB 影片类型标签区（对齐 AVBox TmdbGenreSection）
  */
 @Composable
-internal fun TmdbGenreSection(genres: List<String>) {
+internal fun TmdbGenreSection(
+    genres: List<String>,
+    modifier: Modifier = Modifier,
+) {
     if (genres.isEmpty()) return
 
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(top = 16.dp),
     ) {

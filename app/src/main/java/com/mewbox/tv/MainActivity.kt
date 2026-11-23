@@ -1,5 +1,6 @@
 package com.mewbox.tv
 
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -7,6 +8,7 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
@@ -93,6 +95,7 @@ import androidx.navigation.navDeepLink
 import com.kyant.backdrop.backdrops.LayerBackdrop
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import com.mewbox.tv.api.config.SettingsRepository
 import com.mewbox.tv.api.config.VodConfig
 import com.mewbox.tv.bean.Vod
 import com.mewbox.tv.domain.SiteRepository
@@ -109,6 +112,9 @@ import com.mewbox.tv.ui.navbar.NavAxis
 import com.mewbox.tv.ui.navbar.NavMetrics
 import com.mewbox.tv.ui.search.SearchScreen
 import com.mewbox.tv.ui.setting.SettingsScreen
+import com.mewbox.tv.ui.setting.TmdbSettingsScreen
+import com.mewbox.tv.ui.theme.DARK_WINDOW_BG_ARGB
+import com.mewbox.tv.ui.theme.LIGHT_WINDOW_BG_ARGB
 import com.mewbox.tv.ui.theme.LiquidGlassDefaults
 import com.mewbox.tv.ui.theme.MewBoxTheme
 import com.mewbox.tv.ui.web.fm.HtmlSourceScreen
@@ -134,22 +140,25 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var siteRepository: SiteRepository
     @Inject lateinit var vodConfig: VodConfig
     @Inject lateinit var htmlWebController: HtmlWebController
+    @Inject lateinit var settings: SettingsRepository
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // 强制不受系统深色模式控制：透明状态栏/导航栏 + 深色系统状态栏图标（适配白底）
-        enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.light(
-                android.graphics.Color.TRANSPARENT,
-                android.graphics.Color.TRANSPARENT,
-            ),
-            navigationBarStyle = SystemBarStyle.light(
-                android.graphics.Color.TRANSPARENT,
-                android.graphics.Color.TRANSPARENT,
-            ),
-        )
+        val systemDark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
+        applySystemBars(settings.currentThemeMode.isDark(systemDark))
         setContent {
-            MewBoxTheme(darkTheme = false) {
+            val themeMode by settings.themeModeFlow.collectAsStateWithLifecycle(
+                initialValue = settings.currentThemeMode,
+            )
+            val themeColorArgb by settings.themeColorArgbFlow.collectAsStateWithLifecycle(
+                initialValue = settings.currentThemeColorArgb,
+            )
+            val darkTheme = themeMode.isDark(isSystemInDarkTheme())
+            LaunchedEffect(darkTheme) {
+                applySystemBars(darkTheme)
+            }
+            MewBoxTheme(darkTheme = darkTheme, accentArgb = themeColorArgb) {
                 MainScreen(
                     nodeRuntime = nodeRuntime,
                     vodConfig = vodConfig,
@@ -157,6 +166,20 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    private fun applySystemBars(darkTheme: Boolean) {
+        val barStyle = if (darkTheme) {
+            SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+        } else {
+            SystemBarStyle.light(
+                android.graphics.Color.TRANSPARENT,
+                android.graphics.Color.TRANSPARENT,
+            )
+        }
+        enableEdgeToEdge(statusBarStyle = barStyle, navigationBarStyle = barStyle)
+        window.decorView.setBackgroundColor(if (darkTheme) DARK_WINDOW_BG_ARGB else LIGHT_WINDOW_BG_ARGB)
+        AppToast.setDarkTheme(darkTheme)
     }
 
     /**
@@ -214,6 +237,11 @@ private fun MainScreen(
         nodeRuntime.results.collect { event ->
             val isLong = event.stage == NodeBootStage.FAILED
             AppToast.show(event.message, isLong = isLong)
+        }
+    }
+    LaunchedEffect(vodConfig) {
+        vodConfig.subscriptionMessages.collect { message ->
+            AppToast.show(message)
         }
     }
 
@@ -293,6 +321,7 @@ private fun MainScreen(
                             onNavigateToDetail = navigateToDetail,
                             onNavigateToSearch = navigateToSearch,
                             onNavigateToPlayFromHistory = navigateToPlayFromHistory,
+                            onNavigateToTmdb = { nav.navigate("tmdb_settings") },
                         )
                     }
                 }
@@ -301,8 +330,14 @@ private fun MainScreen(
                         BackHandler { nav.popBackStack() }
                         SettingsScreen(
                             onSwitchToHome = { nav.popBackStack("main", inclusive = false) },
+                            onNavigateToTmdb = { nav.navigate("tmdb_settings") },
                         )
                     }
+                }
+                composable(route = "tmdb_settings") {
+                    TmdbSettingsScreen(
+                        onBack = { nav.popBackStack() },
+                    )
                 }
                 composable(
                     route = "search?keyword={keyword}",
@@ -407,7 +442,7 @@ private fun NodeLoadingOverlay(text: String?, modifier: Modifier = Modifier) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color(0xFF0B1220).copy(alpha = 0.26f))
+                .background(MewBoxTheme.colors.scrim)
                 .pointerInput(Unit) { detectTapGestures { } },
             contentAlignment = Alignment.Center,
         ) {
@@ -432,8 +467,8 @@ private fun NodeLoadingCard(text: String, modifier: Modifier = Modifier) {
     Surface(
         modifier = modifier.widthIn(min = 220.dp, max = 300.dp),
         shape = RoundedCornerShape(24.dp),
-        color = Color.White,
-        border = BorderStroke(0.5.dp, Color(0x14000000)),
+        color = MewBoxTheme.colors.floatingCardBg,
+        border = BorderStroke(0.5.dp, MewBoxTheme.colors.subtleBorder),
     ) {
         Column(
             modifier = Modifier.padding(horizontal = 26.dp, vertical = 24.dp),
@@ -449,14 +484,14 @@ private fun NodeLoadingCard(text: String, modifier: Modifier = Modifier) {
                 text = text,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Medium,
-                color = Color(0xFF1A1A1A),
+                color = MaterialTheme.colorScheme.onSurface,
                 textAlign = TextAlign.Center,
             )
             Spacer(Modifier.height(6.dp))
             Text(
                 text = nodeLoadingHint(text),
                 fontSize = 12.5.sp,
-                color = Color(0xFF8A8F98),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
         }
@@ -481,6 +516,7 @@ private fun MainTabScreen(
     onNavigateToDetail: (String, String, String, String) -> Unit,
     onNavigateToSearch: (String) -> Unit,
     onNavigateToPlayFromHistory: (String, String, String, String) -> Unit,
+    onNavigateToTmdb: () -> Unit,
 ) {
     val pagerState = rememberPagerState(pageCount = { Tab.entries.size })
     val scope = rememberCoroutineScope()
@@ -501,7 +537,7 @@ private fun MainTabScreen(
 
     val liquidGlassConfig = LiquidGlassDefaults.Config
     val liquidGlassEnabled = liquidGlassConfig.navbarEnabled && LiquidGlassDefaults.isSupported
-    val liquidBackdropBgColor = MaterialTheme.colorScheme.surfaceContainer
+    val liquidBackdropBgColor = MaterialTheme.colorScheme.background
     val liquidBackdropOnDraw: ContentDrawScope.() -> Unit =
         remember(liquidBackdropBgColor) {
             { drawRect(liquidBackdropBgColor); drawContent() }
@@ -566,13 +602,14 @@ private fun MainTabScreen(
                             onSwitchToHome = {
                                 scope.launch { pagerState.animateScrollToPage(0) }
                             },
+                            onNavigateToTmdb = onNavigateToTmdb,
                         )
                     }
                 }
             }
 
             if (liquidGlassEnabled) {
-                val scrimColor = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.9f)
+                val scrimColor = MaterialTheme.colorScheme.background.copy(alpha = 0.9f)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -678,16 +715,17 @@ private fun MewFloatingBottomBar(
     modifier: Modifier = Modifier,
 ) {
     val shape = CircleShape
+    val extendedColors = MewBoxTheme.colors
     Surface(
         shape = shape,
-        color = Color.White.copy(alpha = 0.85f),
+        color = extendedColors.navBarFallbackBg,
         shadowElevation = 8.dp,
         border = BorderStroke(
             0.75.dp,
             Brush.verticalGradient(
                 listOf(
-                    Color.White.copy(alpha = 0.85f),
-                    Color.White.copy(alpha = 0.2f),
+                    extendedColors.glassBorderTop,
+                    extendedColors.glassBorderBottom,
                 ),
             ),
         ),
@@ -698,7 +736,7 @@ private fun MewFloatingBottomBar(
             modifier = Modifier
                 .background(
                     Brush.verticalGradient(
-                        0f to Color.White.copy(alpha = 0.4f),
+                        0f to extendedColors.glassGlossTop,
                         0.5f to Color.Transparent,
                     ),
                 )
@@ -723,10 +761,10 @@ private fun MewFloatingBottomBar(
                         .fillMaxHeight()
                         .padding(2.dp)
                         .clip(CircleShape)
-                        .background(Color(0x14000000))
+                        .background(extendedColors.navPillIndicator)
                         .border(
                             width = 0.5.dp,
-                            color = Color.White.copy(alpha = 0.6f),
+                            color = extendedColors.glassBorderTop,
                             shape = CircleShape,
                         ),
                 )
@@ -759,7 +797,7 @@ private fun MewFloatingBottomBar(
                                     tint = if (isSelected) {
                                         MaterialTheme.colorScheme.primary
                                     } else {
-                                        Color(0xFF2C2C2E)
+                                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
                                     },
                                     modifier = Modifier.size(22.dp),
                                 )
@@ -788,16 +826,17 @@ private fun MewFloatingSearchButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val extendedColors = MewBoxTheme.colors
     Surface(
         shape = CircleShape,
-        color = Color.White.copy(alpha = 0.85f),
+        color = extendedColors.navBarFallbackBg,
         shadowElevation = 8.dp,
         border = BorderStroke(
             0.75.dp,
             Brush.verticalGradient(
                 listOf(
-                    Color.White.copy(alpha = 0.85f),
-                    Color.White.copy(alpha = 0.2f),
+                    extendedColors.glassBorderTop,
+                    extendedColors.glassBorderBottom,
                 ),
             ),
         ),
@@ -816,7 +855,7 @@ private fun MewFloatingSearchButton(
                 .clip(CircleShape)
                 .background(
                     Brush.verticalGradient(
-                        0f to Color.White.copy(alpha = 0.4f),
+                        0f to extendedColors.glassGlossTop,
                         0.5f to Color.Transparent,
                     ),
                 ),
@@ -825,7 +864,7 @@ private fun MewFloatingSearchButton(
             Icon(
                 imageVector = Icons.Rounded.Search,
                 contentDescription = "搜索",
-                tint = Color(0xFF2C2C2E),
+                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
                 modifier = Modifier.size(26.dp),
             )
         }

@@ -1,8 +1,12 @@
 package com.mewbox.tv.ui.detail
 
+import android.content.Context
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import coil3.SingletonImageLoader
+import coil3.request.ImageRequest
+import coil3.request.SuccessResult
 import com.mewbox.tv.api.config.SettingsRepository
 import com.mewbox.tv.api.tmdb.TmdbClient
 import com.mewbox.tv.api.tmdb.bean.TmdbMedia
@@ -19,8 +23,10 @@ import com.mewbox.tv.player.PlayerTrack
 import com.mewbox.tv.player.Players
 import com.mewbox.tv.util.AppToast
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -38,6 +44,7 @@ class DetailViewModel @Inject constructor(
     private val tmdbCoordinator: DetailTmdbCoordinator,
     private val sourceCoordinator: DetailSourceCoordinator,
     private val settingsRepository: SettingsRepository,
+    @ApplicationContext private val appContext: Context,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -77,6 +84,10 @@ class DetailViewModel @Inject constructor(
     private var inFlightResolve: InFlightResolve? = null
     private var tmdbJob: Job? = null
     private var tmdbRunningName: String? = null
+    private var posterProbeJob: Job? = null
+    private var originalVodPic: String = ""
+    private var originalPosterLoadFailed: Boolean = false
+    private var hasAppliedTmdbPosterFallback: Boolean = false
     private var lastHeaders: Map<String, String> = emptyMap()
     private var lastFormat: String = ""
 
@@ -135,6 +146,7 @@ class DetailViewModel @Inject constructor(
             vodName = name,
             onQuick = { poster, backdrop ->
                 _uiState.update { it.copy(quickPoster = poster, quickBackdrop = backdrop) }
+                applyTmdbPosterFallbackIfNeeded()
             },
             onLoaded = { detail, imageBase ->
                 _uiState.update {
@@ -145,8 +157,105 @@ class DetailViewModel @Inject constructor(
                         quickBackdrop = TmdbClient.imageUrl(imageBase, detail.backdropPath, "w1280").ifEmpty { null },
                     )
                 }
+                applyTmdbPosterFallbackIfNeeded()
             },
         )
+    }
+
+    private fun onVodPosterReady(vodPic: String) {
+        if (vodPic == originalVodPic && (posterProbeJob?.isActive == true || originalPosterLoadFailed || hasAppliedTmdbPosterFallback)) {
+            return
+        }
+        originalVodPic = vodPic
+        originalPosterLoadFailed = false
+        hasAppliedTmdbPosterFallback = false
+        posterProbeJob?.cancel()
+        if (vodPic.isBlank()) {
+            applyTmdbPosterFallbackIfNeeded()
+        } else {
+            probeOriginalPoster(vodPic)
+        }
+    }
+
+    private fun probeOriginalPoster(url: String) {
+        posterProbeJob?.cancel()
+        if (url.isBlank()) return
+        posterProbeJob = viewModelScope.launch(Dispatchers.IO) {
+            val result = runCatching {
+                val loader = SingletonImageLoader.get(appContext)
+                val request = ImageRequest.Builder(appContext)
+                    .data(url)
+                    .build()
+                loader.execute(request)
+            }.getOrNull()
+            if (result !is SuccessResult) {
+                Timber.w("原始影片海报加载失败，准备使用 TMDB 海报补充: $url")
+                onOriginalPosterLoadFailed(url)
+            }
+        }
+    }
+
+    private fun onOriginalPosterLoadFailed(failedUrl: String) {
+        if (failedUrl.isBlank() || failedUrl != originalVodPic) return
+        if (originalPosterLoadFailed) return
+        originalPosterLoadFailed = true
+        applyTmdbPosterFallbackIfNeeded()
+    }
+
+    private fun applyTmdbPosterFallbackIfNeeded() {
+        val state = _uiState.value
+        val vod = state.vod ?: return
+        val needsFallback = originalVodPic.isBlank() || originalPosterLoadFailed || hasAppliedTmdbPosterFallback
+        if (!needsFallback) return
+
+        val fallbackPoster = pickTmdbPosterFallback(state) ?: return
+        if (vod.vodPic == fallbackPoster) return
+
+        hasAppliedTmdbPosterFallback = true
+        _uiState.update { current ->
+            val currentVod = current.vod
+            if (currentVod != null && currentVod.vodId == vod.vodId) {
+                current.copy(vod = currentVod.copy(vodPic = fallbackPoster))
+            } else {
+                current
+            }
+        }
+        val siteKey = state.currentSite?.key?.takeIf { it.isNotBlank() } ?: currentSiteKey
+        if (siteKey.isNotBlank() && vod.vodId.isNotBlank()) {
+            playbackTracker.updateVodPic(siteKey, vod.vodId, fallbackPoster)
+        }
+        Timber.i("已从 TMDB 补充影片海报地址: ${vod.vodName} -> $fallbackPoster")
+    }
+
+    private fun pickTmdbPosterFallback(state: DetailUiState): String? {
+        val detail = state.tmdbDetail
+        val base = state.tmdbImageBase.trimEnd('/').ifEmpty { "https://image.tmdb.org/t/p" }
+        if (detail != null) {
+            val primaryPoster = TmdbClient.imageUrl(base, detail.posterPath, "w780")
+            if (primaryPoster.isNotEmpty()) return primaryPoster
+
+            val imagePoster = detail.images?.posters.orEmpty()
+                .filter { !it.filePath.isNullOrBlank() }
+                .sortedByDescending { it.voteAverage }
+                .firstOrNull()
+                ?.filePath
+                ?.let { TmdbClient.imageUrl(base, it, "w780") }
+            if (!imagePoster.isNullOrEmpty()) return imagePoster
+        }
+        state.quickPoster?.takeIf { it.isNotBlank() }?.let { return it }
+        if (detail != null) {
+            val primaryBackdrop = TmdbClient.imageUrl(base, detail.backdropPath, "w1280")
+            if (primaryBackdrop.isNotEmpty()) return primaryBackdrop
+
+            val imageBackdrop = detail.images?.backdrops.orEmpty()
+                .filter { !it.filePath.isNullOrBlank() }
+                .sortedByDescending { it.voteAverage }
+                .firstOrNull()
+                ?.filePath
+                ?.let { TmdbClient.imageUrl(base, it, "w1280") }
+            if (!imageBackdrop.isNullOrEmpty()) return imageBackdrop
+        }
+        return state.quickBackdrop?.takeIf { it.isNotBlank() }
     }
 
     init {
@@ -203,6 +312,10 @@ class DetailViewModel @Inject constructor(
         // 切入新影片加载或重试前，先中止旧请求并清空单例播放器残留直连/请求头，避免加载期间“媒体信息”误显上一部片的数据
         detailJob?.cancel()
         playJob?.cancel()
+        posterProbeJob?.cancel()
+        originalVodPic = ""
+        originalPosterLoadFailed = false
+        hasAppliedTmdbPosterFallback = false
         cancelPrefetch()
         playbackTracker.clearSession()
         lastHeaders = emptyMap()
@@ -320,6 +433,7 @@ class DetailViewModel @Inject constructor(
                     ending = history?.ending ?: 0L,
                 )
             }
+            onVodPosterReady(vod.vodPic)
 
             // 加载该视频历史保存的字幕、音轨、视轨用户偏好并注入播放器
             val currentConfigId = repository.getActiveConfigId().also { activeConfigId = it }
@@ -409,10 +523,15 @@ class DetailViewModel @Inject constructor(
             onResolved = { targetSite, validVod, flag, ep ->
                 currentSiteKey = targetSite.key
                 currentVodId = validVod.vodId
+                val resolvedVod = if (validVod.vodPic.isBlank() && initialVodPic.isNotBlank()) {
+                    validVod.copy(vodPic = initialVodPic)
+                } else {
+                    validVod
+                }
                 _uiState.update {
                     it.copy(
                         isLoading = false,
-                        vod = validVod,
+                        vod = resolvedVod,
                         currentSite = targetSite,
                         selectedFlag = flag,
                         selectedEpisode = ep,
@@ -420,6 +539,7 @@ class DetailViewModel @Inject constructor(
                         autoSearchMessage = null,
                     )
                 }
+                onVodPosterReady(resolvedVod.vodPic)
                 // 仅当之前未成功启动 TMDB 流程且无详情时才补充启动，避免采集站脏标题推翻豆瓣权威名
                 if (tmdbJob == null && _uiState.value.tmdbDetail == null) {
                     startTmdbLoad(vodName.ifBlank { validVod.vodName })
@@ -652,7 +772,8 @@ class DetailViewModel @Inject constructor(
 
             lastHeaders = result.header
             lastFormat = result.format
-            playbackTracker.createSession(site, vod, flag, episode, _uiState.value.opening, _uiState.value.ending)
+            val activeVod = _uiState.value.vod ?: vod
+            playbackTracker.createSession(site, activeVod, flag, episode, _uiState.value.opening, _uiState.value.ending)
 
             val title = "${vod.vodName} - ${episode.name} (${primaryPlayUrl.name})"
             val op = _uiState.value.opening
@@ -897,6 +1018,7 @@ class DetailViewModel @Inject constructor(
                         toastMessage = "已修正匹配为《${detail.displayTitle}》",
                     )
                 }
+                applyTmdbPosterFallbackIfNeeded()
             },
             onError = { errorMsg ->
                 _uiState.update {
@@ -1040,6 +1162,10 @@ class DetailViewModel @Inject constructor(
         super.onCleared()
         detailJob?.cancel()
         playJob?.cancel()
+        posterProbeJob?.cancel()
+        originalVodPic = ""
+        originalPosterLoadFailed = false
+        hasAppliedTmdbPosterFallback = false
         cancelPrefetch()
         sourceCoordinator.cancelAll()
         playbackTracker.handleCleared(_uiState.value.opening, _uiState.value.ending)

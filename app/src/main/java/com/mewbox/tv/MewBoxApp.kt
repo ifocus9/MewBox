@@ -2,7 +2,6 @@ package com.mewbox.tv
 
 import android.app.ActivityManager
 import android.app.Application
-import android.app.UiModeManager
 import android.content.Context
 import android.content.res.Configuration
 import android.os.Build
@@ -15,6 +14,7 @@ import coil3.memory.MemoryCache
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import com.mewbox.tv.api.config.SettingsRepository
 import com.mewbox.tv.api.net.LocalMessageBridge
+import com.mewbox.tv.ui.theme.applyApplicationNightMode
 import com.mewbox.tv.util.AppToast
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.runBlocking
@@ -56,11 +56,14 @@ class MewBoxApp : Application(), SingletonImageLoader.Factory {
     override fun onCreate() {
         super.onCreate()
         AppToast.init(this)
-        enforceLightMode()
         if (BuildConfig.DEBUG) Timber.plant(Timber.DebugTree())
         if (!isMainProcess()) return
-        // 在首次网络请求前装载本地地址映射（DataStore 读取很快）
+        // 在首次网络请求与首帧渲染前装载本地地址映射与主题偏好（DataStore 读取很快）
         runBlocking { settings.load() }
+        applyApplicationNightMode(this, settings.currentThemeMode)
+        val systemDark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
+        AppToast.setDarkTheme(settings.currentThemeMode.isDark(systemDark))
         // 启动对齐 FongMi 规范的爬虫宿主通信桥接服务
         messageBridge.start()
     }
@@ -72,20 +75,6 @@ class MewBoxApp : Application(), SingletonImageLoader.Factory {
             val pid = Process.myPid()
             val am = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
             am?.runningAppProcesses?.firstOrNull { it.pid == pid }?.processName == packageName
-        }
-    }
-
-    /** 强制锁定为浅色模式，不受系统深色模式影响 */
-    private fun enforceLightMode() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val uiModeManager = getSystemService(UiModeManager::class.java)
-            uiModeManager?.setApplicationNightMode(UiModeManager.MODE_NIGHT_NO)
-        }
-        val config = resources.configuration
-        if ((config.uiMode and Configuration.UI_MODE_NIGHT_MASK) != Configuration.UI_MODE_NIGHT_NO) {
-            config.uiMode = Configuration.UI_MODE_NIGHT_NO or (config.uiMode and Configuration.UI_MODE_NIGHT_MASK.inv())
-            @Suppress("DEPRECATION")
-            resources.updateConfiguration(config, resources.displayMetrics)
         }
     }
 }

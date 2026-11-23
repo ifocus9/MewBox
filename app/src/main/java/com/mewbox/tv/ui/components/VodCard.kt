@@ -3,14 +3,17 @@ package com.mewbox.tv.ui.components
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -23,6 +26,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -37,17 +41,18 @@ import coil3.compose.AsyncImagePainter
 import coil3.request.ImageRequest
 import coil3.request.transitionFactory
 import coil3.transition.Transition
+import com.kyant.capsule.ContinuousCapsule
 import com.mewbox.tv.bean.Vod
 import com.mewbox.tv.ui.theme.ImagePalette
-import com.mewbox.tv.ui.theme.OrangeBadge
+import com.mewbox.tv.ui.theme.MewBoxTheme
 import com.mewbox.tv.ui.theme.PosterSeedMemory
 
 /**
- * 影视卡片（严格对齐 MewPlayer adapter_vod_rect.xml 样式与 AVBox VodPoster 滚动性能）
- * - 0.72 比例高清海报，8dp 圆角
+ * 影视卡片（2:3 高清海报 + 细腻描边 + 轻渐变角标）
+ * - 标准 2:3 比例高清海报，10dp 圆角 + 0.5dp 细描边（浅色模式白底封面边界依然利落）
  * - 禁用滚动期 crossfade、禁用高频按压弹性重组状态机，原生 Ripple 反馈，确保列表满帧流畅滚动
- * - 右上角橙色标签（#FA8C16，圆角 5dp，加粗白字 10.5sp）
- * - 底部片名居中排布，13.5sp，单行超出省略
+ * - 首页（不展示站点条时）：底部轻渐变遮罩 + 右下角纯白备注；搜索页（展示站点条时）：右上角柔和半透明胶囊
+ * - 底部片名左对齐单行排布，13sp Medium，超出省略
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -60,6 +65,7 @@ fun VodCard(
 ) {
     val context = LocalContext.current
     val loadedImageRef = remember(vod.vodPic) { arrayOfNulls<Image>(1) }
+    val posterShape = RoundedCornerShape(10.dp)
 
     val imageRequest = remember(context, vod.vodPic) {
         ImageRequest.Builder(context)
@@ -71,7 +77,7 @@ fun VodCard(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
+            .clip(posterShape)
             .combinedClickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = LocalIndication.current,
@@ -87,17 +93,18 @@ fun VodCard(
                 },
                 onLongClick = onLongClick,
             ),
-        horizontalAlignment = Alignment.CenterHorizontally,
+        horizontalAlignment = Alignment.Start,
     ) {
         var imageLoadFailed by remember(vod.vodPic) { mutableStateOf(vod.vodPic.isEmpty()) }
 
-        // 海报卡片（单次裁切 + 轻量静态占位底色，仅加载失败展示占位卡片）
+        // 海报卡片（10dp 圆角 + 0.5dp 细描边，仅加载失败展示占位卡片）
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(0.72f)
-                .clip(RoundedCornerShape(8.dp))
-                .background(Color(0x0D000000)),
+                .aspectRatio(2f / 3f)
+                .clip(posterShape)
+                .background(MewBoxTheme.colors.posterPlaceholderBg)
+                .border(0.5.dp, MewBoxTheme.colors.subtleBorder, posterShape),
         ) {
             if (imageLoadFailed) {
                 PosterPlaceholder(
@@ -125,66 +132,98 @@ fun VodCard(
                 )
             }
 
-            // 右上角：橙色备注标签（对齐 MewPlayer shape_vod_score_badge: #FA8C16，圆角 5dp）
             if (vod.vodRemarks.isNotBlank()) {
-                Surface(
-                    shape = RoundedCornerShape(5.dp),
-                    color = OrangeBadge,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(end = 5.dp, top = 5.dp),
-                ) {
-                    Text(
-                        text = vod.vodRemarks,
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontSize = 10.5.sp,
-                            fontWeight = FontWeight.Bold,
-                        ),
-                        color = Color.White,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(horizontal = 5.5.dp, vertical = 2.dp),
-                    )
+                if (!showSite) {
+                    // 首页：底部柔和暗渐变 + 右下角纯白轻字，避免左上/右上黑块遮挡封面主体
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .fillMaxHeight(0.32f)
+                            .background(
+                                Brush.verticalGradient(
+                                    0f to Color.Transparent,
+                                    1f to Color.Black.copy(alpha = 0.68f),
+                                ),
+                            ),
+                        contentAlignment = Alignment.BottomEnd,
+                    ) {
+                        Text(
+                            text = vod.vodRemarks,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Medium,
+                            ),
+                            color = Color.White.copy(alpha = 0.95f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 5.dp),
+                        )
+                    }
+                } else {
+                    // 搜索双列（底部已占站点条）：右上角柔和半透明胶囊
+                    Surface(
+                        shape = ContinuousCapsule,
+                        color = Color(0x8A000000),
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(end = 5.dp, top = 5.dp)
+                            .widthIn(max = 88.dp),
+                    ) {
+                        Text(
+                            text = vod.vodRemarks,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Medium,
+                            ),
+                            color = Color.White,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                    }
                 }
             }
 
-            // 底部站点名称半透明标签（对齐 MewPlayer adapter_vod_rect.xml site & shape_vod_site_bar: #99000000，圆角下 8dp）
+            // 左下角紧凑站点胶囊（仅搜索聚合"全部"时展示，避免整行黑条遮挡封面）
             if (showSite && (vod.siteName.isNotBlank() || vod.siteKey.isNotBlank())) {
-                Box(
+                Surface(
+                    shape = ContinuousCapsule,
+                    color = Color(0x8A000000),
                     modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .background(Color(0x99000000))
-                        .padding(horizontal = 4.dp, vertical = 3.dp),
-                    contentAlignment = Alignment.Center,
+                        .align(Alignment.BottomStart)
+                        .padding(start = 5.dp, bottom = 5.dp)
+                        .widthIn(max = 88.dp),
                 ) {
                     Text(
                         text = vod.siteName.ifBlank { vod.siteKey },
-                        color = Color.White,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 9.5.sp,
+                            fontWeight = FontWeight.Medium,
+                        ),
+                        color = Color.White.copy(alpha = 0.95f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                     )
                 }
             }
         }
 
-        // 片名（对齐 MewPlayer: 居中，13.5sp，单行，超出省略）
+        // 片名（左对齐，13sp Medium，单行超出省略）
         Text(
             text = vod.vodName,
             style = MaterialTheme.typography.bodyMedium.copy(
-                fontSize = 13.5.sp,
-                fontWeight = FontWeight.Normal,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
             ),
             color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center,
+            textAlign = TextAlign.Start,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 6.dp, bottom = 3.dp, start = 2.dp, end = 2.dp),
+                .padding(top = 6.dp, bottom = 2.dp, start = 2.dp, end = 2.dp),
         )
     }
 }

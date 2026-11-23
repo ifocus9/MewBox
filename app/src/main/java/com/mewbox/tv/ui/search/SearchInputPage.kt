@@ -1,5 +1,6 @@
 package com.mewbox.tv.ui.search
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -33,6 +34,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -55,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kyant.capsule.ContinuousCapsule
 import com.mewbox.tv.ui.components.glassTopBarSurface
+import com.mewbox.tv.ui.theme.MewBoxTheme
 import kotlinx.coroutines.delay
 
 /**
@@ -89,6 +92,11 @@ fun SearchInputPage(
         }
     }
 
+    val barFallback = MewBoxTheme.colors.searchBarFallback
+    val onSurface = MaterialTheme.colorScheme.onSurface
+    val onSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
+    val primaryColor = MaterialTheme.colorScheme.primary
+
     // 顶部搜索 Toolbar
     Row(
         modifier = modifier
@@ -101,7 +109,7 @@ fun SearchInputPage(
         Box(
             modifier = Modifier
                 .size(40.dp)
-                .glassTopBarSurface(CircleShape, Color(0xFFF4F5F7))
+                .glassTopBarSurface(CircleShape, barFallback)
                 .clickable(onClick = {
                     keyboard?.hide()
                     onBack()
@@ -111,7 +119,7 @@ fun SearchInputPage(
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                 contentDescription = "返回",
-                tint = Color(0xFF1F2329),
+                tint = onSurface,
                 modifier = Modifier.size(22.dp),
             )
         }
@@ -124,7 +132,7 @@ fun SearchInputPage(
                 .height(38.dp)
                 .glassTopBarSurface(
                     shape = ContinuousCapsule,
-                    fallbackColor = Color(0xFFF4F5F7),
+                    fallbackColor = barFallback,
                     pressEffect = false,
                 )
                 .padding(horizontal = 12.dp),
@@ -133,7 +141,7 @@ fun SearchInputPage(
             Icon(
                 imageVector = Icons.Default.Search,
                 contentDescription = null,
-                tint = Color(0xFF8A8F99),
+                tint = onSurfaceVariant,
                 modifier = Modifier.size(18.dp),
             )
             Spacer(modifier = Modifier.width(8.dp))
@@ -142,7 +150,7 @@ fun SearchInputPage(
                 if (state.keyword.isEmpty()) {
                     Text(
                         text = "搜索影片、演员、剧集...",
-                        color = Color(0xFF8A8F99),
+                        color = onSurfaceVariant,
                         fontSize = 14.5.sp,
                     )
                 }
@@ -151,11 +159,11 @@ fun SearchInputPage(
                     onValueChange = onKeywordChange,
                     singleLine = true,
                     textStyle = TextStyle(
-                        color = Color(0xFF1F2329),
+                        color = onSurface,
                         fontSize = 14.5.sp,
                         fontWeight = FontWeight.Medium,
                     ),
-                    cursorBrush = SolidColor(Color(0xFF217AF4)),
+                    cursorBrush = SolidColor(primaryColor),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(
                         onSearch = {
@@ -178,7 +186,7 @@ fun SearchInputPage(
                     Icon(
                         imageVector = Icons.Default.Clear,
                         contentDescription = "清除",
-                        tint = Color(0xFF8A8F99),
+                        tint = onSurfaceVariant,
                         modifier = Modifier.size(16.dp),
                     )
                 }
@@ -191,14 +199,14 @@ fun SearchInputPage(
         Box(
             modifier = Modifier
                 .size(38.dp)
-                .glassTopBarSurface(CircleShape, Color(0xFFF4F5F7))
+                .glassTopBarSurface(CircleShape, barFallback)
                 .clickable(onClick = onOpenSiteFilter),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 imageVector = Icons.Default.Tune,
                 contentDescription = "指定搜索站点",
-                tint = if (state.searchTargetSiteKey != null) Color(0xFF217AF4) else Color(0xFF555555),
+                tint = if (state.searchTargetSiteKey != null) primaryColor else onSurface,
                 modifier = Modifier.size(22.dp),
             )
         }
@@ -211,7 +219,7 @@ fun SearchInputPage(
             .verticalScroll(scrollState)
             .padding(horizontal = 16.dp, vertical = 8.dp),
     ) {
-        // 搜索历史（对齐 MewPlayer adapter_search_record.xml: 28dp 圆角灰色胶囊）
+        // 搜索历史（对齐 MewPlayer adapter_search_record.xml: 28dp 圆角胶囊）
         if (state.history.isNotEmpty()) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -222,13 +230,13 @@ fun SearchInputPage(
                     text = "搜索历史",
                     fontSize = 17.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFF1F2329),
+                    color = onSurface,
                 )
                 IconButton(onClick = onClearHistory, modifier = Modifier.size(32.dp)) {
                     Icon(
                         imageVector = Icons.Default.DeleteOutline,
                         contentDescription = "清空历史",
-                        tint = Color(0xFF8A8F99),
+                        tint = onSurfaceVariant,
                         modifier = Modifier.size(20.dp),
                     )
                 }
@@ -236,6 +244,7 @@ fun SearchInputPage(
 
             Spacer(modifier = Modifier.height(6.dp))
 
+            val isDark = MewBoxTheme.isDark
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -244,7 +253,8 @@ fun SearchInputPage(
                 state.history.forEach { item ->
                     Surface(
                         shape = RoundedCornerShape(20.dp),
-                        color = Color(0xFFffffff),
+                        color = MaterialTheme.colorScheme.surface,
+                        border = if (isDark) BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant) else null,
                         modifier = Modifier
                             .height(32.dp)
                             .clip(RoundedCornerShape(20.dp))
@@ -265,7 +275,7 @@ fun SearchInputPage(
                             Text(
                                 text = item,
                                 fontSize = 13.5.sp,
-                                color = Color(0xFF333842),
+                                color = onSurface,
                             )
                         }
                     }
@@ -323,17 +333,14 @@ private fun HotRankCategorySection(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            // 1. 设置圆角防溢出
             .clip(RoundedCornerShape(12.dp))
-            // 2. 设置背景色（例如卡片白或浅底色，可按需替换）
-            .background(Color(0xFFffffff))
-            // 3. 设置内边距，使内容不贴边
+            .background(MaterialTheme.colorScheme.surface)
             .padding(16.dp)) {
         Text(
             text = title,
             fontSize = 17.sp,
             fontWeight = FontWeight.Bold,
-            color = Color(0xFF1F2329),
+            color = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.padding(bottom = 8.dp),
         )
 
@@ -397,13 +404,13 @@ private fun HotRankItem(
             .padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // 序号：前三名高亮橙色，其余灰色，粗体斜体
+        // 序号：前三名高亮橙色，其余柔和灰，粗体斜体
         Text(
             text = rank.toString(),
             fontSize = 15.sp,
             fontWeight = FontWeight.Bold,
             fontStyle = FontStyle.Italic,
-            color = if (rank <= 3) Color(0xFFFA8C16) else Color(0xFF8A8F99),
+            color = if (rank <= 3) Color(0xFFFA8C16) else MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.width(22.dp),
         )
 
@@ -413,7 +420,7 @@ private fun HotRankItem(
         Text(
             text = text,
             fontSize = 14.5.sp,
-            color = Color(0xFF1F2329),
+            color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),

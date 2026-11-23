@@ -28,6 +28,7 @@ import com.kyant.backdrop.highlight.Highlight
 import com.kyant.backdrop.shadow.Shadow
 import com.mewbox.tv.ui.navbar.InteractiveHighlight
 import com.mewbox.tv.ui.theme.LiquidGlassDefaults
+import com.mewbox.tv.ui.theme.MewBoxTheme
 import kotlin.math.min
 
 val LocalTopBarGlassBackdrop = compositionLocalOf<LayerBackdrop?> { null }
@@ -39,27 +40,30 @@ val LocalTopBarGlassBackdrop = compositionLocalOf<LayerBackdrop?> { null }
 @Composable
 fun Modifier.pseudoGlass(
     shape: Shape,
-    baseColor: Color = Color.White.copy(alpha = 0.75f),
+    baseColor: Color = MewBoxTheme.colors.glassFallback,
     strokeWidth: Dp = 0.75.dp,
-): Modifier = this
-    .clip(shape)
-    .background(baseColor)
-    .background(
-        Brush.verticalGradient(
-            0f to Color.White.copy(alpha = 0.35f),
-            0.5f to Color.Transparent,
-        )
-    )
-    .border(
-        width = strokeWidth,
-        brush = Brush.verticalGradient(
-            listOf(
-                Color.White.copy(alpha = 0.75f),
-                Color.White.copy(alpha = 0.18f),
+): Modifier {
+    val extendedColors = MewBoxTheme.colors
+    return this
+        .clip(shape)
+        .background(baseColor)
+        .background(
+            Brush.verticalGradient(
+                0f to extendedColors.glassGlossTop,
+                0.5f to Color.Transparent,
             )
-        ),
-        shape = shape,
-    )
+        )
+        .border(
+            width = strokeWidth,
+            brush = Brush.verticalGradient(
+                listOf(
+                    extendedColors.glassBorderTop,
+                    extendedColors.glassBorderBottom,
+                )
+            ),
+            shape = shape,
+        )
+}
 
 /**
  * 自适应通用玻璃表面修饰符：
@@ -70,14 +74,14 @@ fun Modifier.pseudoGlass(
 @Composable
 fun Modifier.glassTopBarSurface(
     shape: Shape,
-    fallbackColor: Color = Color.White.copy(alpha = 0.75f),
+    fallbackColor: Color = Color.Unspecified,
     pressEffect: Boolean = true,
 ): Modifier = glassSurface(LocalTopBarGlassBackdrop.current ?: emptyBackdrop(), shape, fallbackColor, pressEffect)
 
 @Composable
 fun Modifier.glassSurface(
     shape: Shape,
-    fallbackColor: Color = Color.White.copy(alpha = 0.75f),
+    fallbackColor: Color = Color.Unspecified,
     pressEffect: Boolean = true,
 ): Modifier = glassSurface(emptyBackdrop(), shape, fallbackColor, pressEffect)
 
@@ -85,7 +89,7 @@ fun Modifier.glassSurface(
 fun Modifier.glassSurface(
     backdrop: Backdrop?,
     shape: Shape,
-    fallbackColor: Color = Color.White.copy(alpha = 0.75f),
+    fallbackColor: Color = Color.Unspecified,
     pressEffect: Boolean = true,
 ): Modifier {
     val config = LiquidGlassDefaults.Config
@@ -93,17 +97,24 @@ fun Modifier.glassSurface(
         config.controlsEnabled &&
         LiquidGlassDefaults.isSupported
     if (!glassEnabled) {
-        val baseColor = if (fallbackColor != Color.Unspecified) fallbackColor else Color.White.copy(alpha = 0.75f)
+        val baseColor = if (fallbackColor != Color.Unspecified) fallbackColor else MewBoxTheme.colors.glassFallback
         return this.pseudoGlass(shape = shape, baseColor = baseColor)
     }
 
+    val isDark = MewBoxTheme.isDark
     val density = LocalDensity.current
     val blurPx = with(density) { config.blurDp.dp.toPx() }
     val distortionPx = with(density) { config.distortionDp.dp.toPx() }
     val supportsLens = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
-    val containerColor = MaterialTheme.colorScheme.surfaceContainer.copy(
-        alpha = 0.4f * config.containerAlphaScale
-    )
+    val containerColor = if (isDark) {
+        MaterialTheme.colorScheme.surfaceContainerHigh.copy(
+            alpha = 0.68f * config.containerAlphaScale
+        )
+    } else {
+        MaterialTheme.colorScheme.surfaceBright.copy(
+            alpha = 0.62f * config.containerAlphaScale
+        )
+    }
     val animationScope = rememberCoroutineScope()
     val interactiveHighlight =
         if (pressEffect) remember(animationScope) { InteractiveHighlight(animationScope) } else null
@@ -127,11 +138,11 @@ fun Modifier.glassSurface(
                 )
             }
         },
-        highlight = { Highlight.Default },
+        highlight = { Highlight.Default.copy(alpha = if (isDark) 0.45f else 1f) },
         shadow = {
             Shadow(
                 radius = 8.dp,
-                color = Color.Black.copy(0.1f),
+                color = Color.Black.copy(if (isDark) 0.3f else 0.1f),
             )
         },
         layerBlock = interactiveHighlight?.let(::pressGrowthLayerBlock),
@@ -151,4 +162,3 @@ private fun pressGrowthLayerBlock(
         scaleX = 1f + growthPx / size.maxDimension
     }
 }
-

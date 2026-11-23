@@ -149,9 +149,15 @@ fun DetailScreen(
 
     val initialPic = viewModel.initialVodPic.ifBlank { state.vod?.vodPic.orEmpty() }
 
-    val backdropUrl = state.tmdbDetail?.backdropPath?.let {
+    val backdropUrl = state.tmdbDetail?.backdropPath?.takeIf { it.isNotBlank() }?.let {
         TmdbClient.imageUrl(state.tmdbImageBase, it, "w1280")
-    } ?: state.quickBackdrop ?: state.vod?.vodPic
+    }
+        ?: state.quickBackdrop
+        ?: state.tmdbDetail?.posterPath?.takeIf { it.isNotBlank() }?.let {
+            TmdbClient.imageUrl(state.tmdbImageBase, it, "w780")
+        }
+        ?: state.quickPoster
+        ?: state.vod?.vodPic
 
     var backdropSeed by remember {
         mutableStateOf(PosterSeedMemory.seedOf(initialPic) ?: PosterSeedMemory.seedOf(backdropUrl))

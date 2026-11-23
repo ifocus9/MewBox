@@ -107,15 +107,13 @@ class HtmlWebController @Inject constructor(
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
     private var currentViewport: WebHomeViewport = WebHomeViewport()
 
-    /** 切换 HTML 订阅源：loadSubscriptionUrl 置位 pending，onPageStarted 置位 armed，新文档提交后 clearHistory */
-    private var clearHistoryPending = false
-    private var clearHistoryArmed = false
-    /** 当前已在 WebView 中实际提交文档的订阅根地址 */
-    private var committedRootUrl = ""
+    private val loadTracker = HtmlWebLoadTracker()
+    private var pendingBlankFallback: Runnable? = null
 
     private val pendingInlineCallbacks = ConcurrentHashMap<String, (JsonObject?) -> Unit>()
 
     companion object {
+        private const val BLANK_RESET_FALLBACK_MS = 120L
         private const val PAUSE_MEDIA_SCRIPT =
             "(function(){try{document.querySelectorAll('video,audio').forEach(function(m){try{m.pause();}catch(e){}});}catch(e){}})();"
     }
@@ -220,18 +218,25 @@ class HtmlWebController @Inject constructor(
         val target = url.trim()
         if (!isLoadableUrl(target)) return
         val wv = getOrCreateWebView(appContext)
-        val switched = _state.value.loadedRootUrl != target
-        if (!forceReload && !switched && committedRootUrl == target && !wv.url.isNullOrBlank()) {
-            _state.update { it.copy(isInitialPageLoading = false) }
-            return
+        when (val decision = loadTracker.beginSubscriptionLoad(target, wv.url, forceReload)) {
+            HtmlWebLoadTracker.BeginDecision.AlreadyLoaded -> {
+                _state.update { it.copy(isInitialPageLoading = false) }
+            }
+            HtmlWebLoadTracker.BeginDecision.AlreadyLoading -> return
+            is HtmlWebLoadTracker.BeginDecision.ResetToBlankThenLoad -> {
+                prepareWebViewForNavigation(wv, switched = decision.switched, target = target)
+                scheduleBlankFallback(decision.generation, wv)
+                wv.loadUrl(HtmlWebLoadTracker.BLANK_URL)
+            }
+            is HtmlWebLoadTracker.BeginDecision.LoadDirectly -> {
+                prepareWebViewForNavigation(wv, switched = decision.switched, target = target)
+                wv.loadUrl(target)
+            }
         }
-        // 切换到另一个 HTML 订阅源（或强制重载根地址）：新网页文档提交后清空历史，
-        // 避免系统返回键退回到上一个 HTML 订阅源导致页面与当前激活订阅不一致
-        if (switched || forceReload || committedRootUrl != target) {
-            clearHistoryPending = true
-            clearHistoryArmed = false
-            committedRootUrl = ""
-        }
+    }
+
+    private fun prepareWebViewForNavigation(wv: WebView, switched: Boolean, target: String) {
+        cancelBlankFallback()
         if (switched) {
             hideCustomView()
             wv.stopLoading()
@@ -250,7 +255,28 @@ class HtmlWebController @Inject constructor(
                 chromeOptions = WebHomeChromeOptions(),
             )
         }
-        wv.loadUrl(target)
+    }
+
+    private fun cancelBlankFallback() {
+        pendingBlankFallback?.let { mainHandler.removeCallbacks(it) }
+        pendingBlankFallback = null
+    }
+
+    private fun scheduleBlankFallback(generation: Long, view: WebView) {
+        cancelBlankFallback()
+        val task = Runnable {
+            pendingBlankFallback = null
+            advanceFromBlankReset(generation, view)
+        }
+        pendingBlankFallback = task
+        mainHandler.postDelayed(task, BLANK_RESET_FALLBACK_MS)
+    }
+
+    private fun advanceFromBlankReset(generation: Long, view: WebView) {
+        val target = loadTracker.onBlankResetComplete(generation) ?: return
+        cancelBlankFallback()
+        view.clearHistory()
+        view.loadUrl(target)
     }
 
     private fun isLoadableUrl(url: String): Boolean {
@@ -262,17 +288,12 @@ class HtmlWebController @Inject constructor(
         val rootUrl = _state.value.loadedRootUrl
         val currentUrl = wv.url.orEmpty()
         if (rootUrl.isBlank() && currentUrl.isBlank()) return
-        _state.update { it.copy(isLoading = true, isInitialPageLoading = true, progress = 10) }
         // 若当前激活的 HTML 订阅尚未完成首次文档提交，直接加载目标订阅根地址，避免误刷新切换前残留的旧网页
-        if (
-            currentUrl.isBlank() ||
-            currentUrl.equals("about:blank", ignoreCase = true) ||
-            clearHistoryPending ||
-            clearHistoryArmed ||
-            (rootUrl.isNotBlank() && committedRootUrl != rootUrl)
-        ) {
-            wv.loadUrl(rootUrl.ifBlank { currentUrl })
+        if (loadTracker.shouldReloadRoot(currentUrl)) {
+            loadSubscriptionUrl(rootUrl.ifBlank { currentUrl }, forceReload = true)
         } else {
+            loadTracker.beginReload()
+            _state.update { it.copy(isLoading = true, isInitialPageLoading = true, progress = 10) }
             wv.reload()
         }
     }
@@ -308,7 +329,7 @@ class HtmlWebController @Inject constructor(
             return
         }
         val wv = webView
-        if (wv == null || clearHistoryPending || clearHistoryArmed || committedRootUrl != _state.value.loadedRootUrl) {
+        if (wv == null || !loadTracker.canNavigateBack(true)) {
             onFallback()
             return
         }
@@ -359,9 +380,8 @@ class HtmlWebController @Inject constructor(
 
     fun destroyWebView() {
         hideCustomView()
-        clearHistoryPending = false
-        clearHistoryArmed = false
-        committedRootUrl = ""
+        cancelBlankFallback()
+        loadTracker.reset()
         val wv = webView ?: return
         webView = null
         runCatching {
@@ -436,10 +456,7 @@ class HtmlWebController @Inject constructor(
         wv.webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
                 super.onPageStarted(view, url, favicon)
-                if (clearHistoryPending) {
-                    clearHistoryPending = false
-                    clearHistoryArmed = true
-                }
+                if (loadTracker.onPageStarted(url) == HtmlWebLoadTracker.PageStartAction.IGNORE) return
                 _state.update {
                     it.copy(
                         currentUrl = url.orEmpty(),
@@ -453,59 +470,74 @@ class HtmlWebController @Inject constructor(
 
             override fun onPageCommitVisible(view: WebView, url: String?) {
                 super.onPageCommitVisible(view, url)
-                if (clearHistoryPending || clearHistoryArmed) {
-                    clearHistoryPending = false
-                    clearHistoryArmed = false
-                    committedRootUrl = _state.value.loadedRootUrl
-                    view.clearHistory()
-                } else if (committedRootUrl.isEmpty() && _state.value.loadedRootUrl.isNotBlank()) {
-                    committedRootUrl = _state.value.loadedRootUrl
+                when (val action = loadTracker.onPageCommitVisible(url)) {
+                    HtmlWebLoadTracker.CommitAction.IGNORE -> return
+                    is HtmlWebLoadTracker.CommitAction.BLANK_READY -> {
+                        advanceFromBlankReset(action.generation, view)
+                        return
+                    }
+                    is HtmlWebLoadTracker.CommitAction.COMMITTED -> {
+                        if (action.shouldClearHistory) {
+                            view.clearHistory()
+                        }
+                        _state.update {
+                            it.copy(canGoBack = canNavigateBack(view))
+                        }
+                        injectSdk(view)
+                    }
                 }
-                _state.update {
-                    it.copy(canGoBack = canNavigateBack(view))
-                }
-                injectSdk(view)
             }
 
             override fun onPageFinished(view: WebView, url: String?) {
                 super.onPageFinished(view, url)
-                if (clearHistoryPending || clearHistoryArmed) {
-                    clearHistoryPending = false
-                    clearHistoryArmed = false
-                    committedRootUrl = _state.value.loadedRootUrl
-                    view.clearHistory()
-                } else if (committedRootUrl.isEmpty() && _state.value.loadedRootUrl.isNotBlank()) {
-                    committedRootUrl = _state.value.loadedRootUrl
+                when (val action = loadTracker.onPageFinished(url)) {
+                    HtmlWebLoadTracker.FinishAction.IGNORE -> return
+                    is HtmlWebLoadTracker.FinishAction.BLANK_READY -> {
+                        advanceFromBlankReset(action.generation, view)
+                        return
+                    }
+                    is HtmlWebLoadTracker.FinishAction.FINISHED -> {
+                        if (action.shouldClearHistory) {
+                            view.clearHistory()
+                        }
+                        injectSdk(view)
+                        val title = view.title?.trim().orEmpty()
+                        val validTitle = title.isNotBlank() &&
+                            !title.startsWith("http", ignoreCase = true) &&
+                            !HtmlWebLoadTracker.isBlankUrl(title)
+                        _state.update {
+                            it.copy(
+                                currentUrl = url.orEmpty().ifBlank { it.currentUrl },
+                                pageTitle = if (validTitle) title else it.pageTitle,
+                                isLoading = false,
+                                isInitialPageLoading = false,
+                                progress = 100,
+                                canGoBack = canNavigateBack(view),
+                            )
+                        }
+                        CookieBridge.flush()
+                    }
                 }
-                injectSdk(view)
-                val title = view.title?.trim().orEmpty()
-                _state.update {
-                    it.copy(
-                        currentUrl = url.orEmpty().ifBlank { it.currentUrl },
-                        pageTitle = if (title.isNotBlank() && !title.startsWith("http")) title else it.pageTitle,
-                        isLoading = false,
-                        isInitialPageLoading = false,
-                        progress = 100,
-                        canGoBack = canNavigateBack(view),
-                    )
-                }
-                CookieBridge.flush()
             }
 
             override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
                 super.doUpdateVisitedHistory(view, url, isReload)
-                if (clearHistoryPending || clearHistoryArmed) {
-                    // 新订阅源文档已提交：丢弃切换前上一个 HTML 源的历史记录（对齐 MewPlayer HomeWebController）
-                    committedRootUrl = _state.value.loadedRootUrl
-                    view.clearHistory()
+                when (val action = loadTracker.doUpdateVisitedHistory(url)) {
+                    HtmlWebLoadTracker.HistoryAction.IGNORE -> return
+                    is HtmlWebLoadTracker.HistoryAction.UPDATE -> {
+                        if (action.shouldClearHistory) {
+                            // 新订阅源文档已提交：丢弃切换前上一个 HTML 源的历史记录（对齐 MewPlayer HomeWebController）
+                            view.clearHistory()
+                        }
+                        _state.update {
+                            it.copy(
+                                currentUrl = url.orEmpty().ifBlank { it.currentUrl },
+                                canGoBack = canNavigateBack(view),
+                            )
+                        }
+                        injectSdk(view)
+                    }
                 }
-                _state.update {
-                    it.copy(
-                        currentUrl = url.orEmpty().ifBlank { it.currentUrl },
-                        canGoBack = canNavigateBack(view),
-                    )
-                }
-                injectSdk(view)
             }
 
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
@@ -533,7 +565,7 @@ class HtmlWebController @Inject constructor(
 
             override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
                 super.onReceivedError(view, request, error)
-                if (request?.isForMainFrame == true) {
+                if (request?.isForMainFrame == true && loadTracker.onMainFrameError(request.url?.toString())) {
                     _state.update {
                         it.copy(
                             isLoading = false,
@@ -559,14 +591,16 @@ class HtmlWebController @Inject constructor(
         wv.webChromeClient = object : WebChromeClient() {
             override fun onProgressChanged(view: WebView, newProgress: Int) {
                 super.onProgressChanged(view, newProgress)
-                if (newProgress >= 20) {
+                val action = loadTracker.onProgressChanged(view.url, newProgress)
+                if (action !is HtmlWebLoadTracker.ProgressAction.UPDATE) return
+                if (action.injectSdk) {
                     injectSdk(view)
                 }
                 _state.update {
                     it.copy(
-                        progress = newProgress,
-                        isLoading = newProgress < 100,
-                        isInitialPageLoading = if (newProgress >= 85) false else it.isInitialPageLoading,
+                        progress = action.progress,
+                        isLoading = action.isLoading,
+                        isInitialPageLoading = if (action.clearInitialLoading) false else it.isInitialPageLoading,
                         canGoBack = canNavigateBack(view),
                     )
                 }
@@ -574,11 +608,9 @@ class HtmlWebController @Inject constructor(
 
             override fun onReceivedTitle(view: WebView?, title: String?) {
                 super.onReceivedTitle(view, title)
-                if (clearHistoryPending) return
+                if (!loadTracker.onReceivedTitle(title)) return
                 val clean = title?.trim().orEmpty()
-                if (clean.isNotBlank() && !clean.startsWith("http://") && !clean.startsWith("https://") && !clean.startsWith("file://")) {
-                    _state.update { it.copy(pageTitle = clean) }
-                }
+                _state.update { it.copy(pageTitle = clean) }
             }
 
             override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
@@ -658,12 +690,8 @@ class HtmlWebController @Inject constructor(
         view.evaluateJavascript(FmJsSdk.buildScript(currentViewport), null)
     }
 
-    private fun canNavigateBack(view: WebView): Boolean {
-        if (clearHistoryPending || clearHistoryArmed || committedRootUrl != _state.value.loadedRootUrl) {
-            return false
-        }
-        return view.canGoBack()
-    }
+    private fun canNavigateBack(view: WebView): Boolean =
+        loadTracker.canNavigateBack(view.canGoBack())
 
     private fun syncBackState(view: WebView) {
         _state.update { it.copy(canGoBack = canNavigateBack(view)) }

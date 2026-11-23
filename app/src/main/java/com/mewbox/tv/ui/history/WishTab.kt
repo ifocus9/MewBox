@@ -61,8 +61,7 @@ import com.mewbox.tv.api.douban.WishUiState
 import com.mewbox.tv.ui.components.LoadingState
 import com.mewbox.tv.ui.components.PosterPlaceholder
 import com.mewbox.tv.ui.setting.DoubanDialog
-import com.mewbox.tv.ui.theme.BluePrimary
-import com.mewbox.tv.ui.theme.OrangeBadge
+import com.mewbox.tv.ui.theme.MewBoxTheme
 import kotlinx.coroutines.flow.distinctUntilChanged
 import timber.log.Timber
 import java.util.Locale
@@ -395,12 +394,12 @@ private fun WishItemCard(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Surface(
                         shape = RoundedCornerShape(4.dp),
-                        color = if (item.isTv) BluePrimary else OrangeBadge,
+                        color = MewBoxTheme.colors.primarySoftBg,
                     ) {
                         Text(
                             text = if (item.isTv) "剧集" else "电影",
                             style = MaterialTheme.typography.labelSmall,
-                            color = Color.White,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
                             modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
                         )
                     }

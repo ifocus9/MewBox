@@ -12,6 +12,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -29,11 +30,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshots.SnapshotStateSet
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mewbox.tv.ui.components.glassSurface
+import com.mewbox.tv.ui.theme.MewBoxTheme
 import kotlinx.coroutines.delay
 
 /** 参与首屏错落淡入的卡片数量（前两行），翻页加载的条目不再重复播放入场动画 */
@@ -79,19 +81,19 @@ fun EndHint(modifier: Modifier = Modifier) {
             modifier = Modifier
                 .width(28.dp)
                 .height(1.dp)
-                .background(Color(0xFFDCE0E8)),
+                .background(MaterialTheme.colorScheme.outlineVariant),
         )
         Text(
             text = "已经到底啦",
             fontSize = 12.sp,
-            color = Color(0xFFB3B9C4),
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
             modifier = Modifier.padding(horizontal = 10.dp),
         )
         Box(
             modifier = Modifier
                 .width(28.dp)
                 .height(1.dp)
-                .background(Color(0xFFDCE0E8)),
+                .background(MaterialTheme.colorScheme.outlineVariant),
         )
     }
 }
@@ -116,17 +118,24 @@ fun HomeBackToTopButton(
                 .size(40.dp)
                 .glassSurface(
                     shape = CircleShape,
-                    fallbackColor = Color(0xE6FFFFFF),
-                )
-                .clickable { onClick() },
+                    fallbackColor = MewBoxTheme.colors.glassFallback,
+                ),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(
-                imageVector = Icons.Default.KeyboardArrowUp,
-                contentDescription = "回到顶部",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(24.dp),
-            )
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(CircleShape)
+                    .clickable(onClick = onClick),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Default.KeyboardArrowUp,
+                    contentDescription = "回到顶部",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
         }
     }
 }

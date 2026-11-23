@@ -2,6 +2,7 @@ package com.mewbox.tv.ui.home
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.fongmi.nodejs.NodeClient
 import com.mewbox.tv.api.config.SettingsRepository
 import com.mewbox.tv.api.config.VodConfig
 import com.mewbox.tv.bean.Config
@@ -30,6 +31,13 @@ import javax.inject.Inject
 
 /** 分类数据缓存最多保留的分类数量（超出按 LRU 淘汰） */
 private const val MAX_CACHED_CLASSES = 12
+
+/** 首页已激活筛选条件胶囊展示模型 */
+data class ActiveFilterChip(
+    val filterKey: String,
+    val filterName: String,
+    val valueLabel: String,
+)
 
 data class HomeUiState(
     val currentSite: Site? = null,
@@ -66,6 +74,35 @@ data class HomeUiState(
 
     val currentDefaultFilters: Map<String, String>
         get() = buildDefaultFiltersForClass(currentFilters)
+
+    val activeFilterChips: List<ActiveFilterChip>
+        get() = buildActiveFilterChips(currentFilters, currentSelectedFilters)
+}
+
+private fun buildActiveFilterChips(
+    filters: List<VodFilter>,
+    selectedFilters: Map<String, String>,
+): List<ActiveFilterChip> {
+    if (filters.isEmpty() || selectedFilters.isEmpty()) return emptyList()
+    val chips = ArrayList<ActiveFilterChip>()
+    for (filter in filters) {
+        val selectedVal = selectedFilters[filter.key] ?: continue
+        val defaultVal = filter.init?.takeIf { it.isNotEmpty() }
+        if (selectedVal == defaultVal) continue
+        val label = filter.values
+            .firstOrNull { it.v == selectedVal }
+            ?.n
+            ?.takeIf { it.isNotBlank() }
+            ?: selectedVal
+        chips.add(
+            ActiveFilterChip(
+                filterKey = filter.key,
+                filterName = filter.name,
+                valueLabel = label,
+            )
+        )
+    }
+    return chips
 }
 
 private fun buildDefaultFiltersForClass(filters: List<VodFilter>): Map<String, String> {
@@ -100,6 +137,7 @@ class HomeViewModel @Inject constructor(
 
     private var loadJob: Job? = null
     private var refreshJob: Job? = null
+    private var isSwitchingSubscription = false
 
     /** 单个分类的已加载结果快照 */
     private data class CategoryCache(
@@ -264,6 +302,28 @@ class HomeViewModel @Inject constructor(
         applyClassFilters(site, classId, newFilters)
     }
 
+    /** 清除单个维度的筛选：若存在非空默认 init 则恢复默认，否则移除该维度，并刷新列表。 */
+    fun clearFilter(filterKey: String) {
+        val current = _uiState.value
+        val site = current.currentSite ?: return
+        val classId = current.selectedClassId
+        if (classId.isEmpty()) return
+
+        val oldFilters = current.selectedFiltersByClass[classId].orEmpty()
+        val filter = current.filtersByClass[classId].orEmpty().firstOrNull { it.key == filterKey }
+        val defaultVal = filter?.init?.takeIf { it.isNotEmpty() }
+
+        val newFilters = LinkedHashMap(oldFilters)
+        if (defaultVal != null) {
+            newFilters[filterKey] = defaultVal
+        } else {
+            newFilters.remove(filterKey)
+        }
+        if (newFilters == oldFilters) return
+
+        applyClassFilters(site, classId, newFilters)
+    }
+
     /** 重置当前分类筛选条件到默认状态并刷新列表。 */
     fun resetFilters() {
         val current = _uiState.value
@@ -305,17 +365,17 @@ class HomeViewModel @Inject constructor(
             return
         }
 
+        _uiState.update {
+            it.copy(
+                selectedFiltersByClass = updatedSelected,
+                page = 1,
+                items = emptyList(),
+                isLoading = true,
+                isLoadingMore = false,
+                error = null,
+            )
+        }
         loadJob = viewModelScope.launch {
-            _uiState.update {
-                it.copy(
-                    selectedFiltersByClass = updatedSelected,
-                    page = 1,
-                    items = emptyList(),
-                    isLoading = true,
-                    isLoadingMore = false,
-                    error = null,
-                )
-            }
             loadCategory(site, classId, page = 1, filters = filters)
         }
     }
@@ -438,18 +498,25 @@ class HomeViewModel @Inject constructor(
 
     /**
      * 首页 logo 弹窗切换订阅：导入目标订阅并刷新首页。
-     * Node.js 源的加载过程由全局 loading 浮层提示，这里不再额外发提示。
+     * Node.js 源的加载过程由全局 loading 浮层提示；结果统一经全局通道弹出，避免跨根页面切换导致 Toast 残留。
      */
     fun switchSubscription(url: String) {
+        if (isSwitchingSubscription) return
+        val targetUrl = url.trim()
+        if (targetUrl.isEmpty()) return
+        isSwitchingSubscription = true
         viewModelScope.launch {
             try {
-                val count = vodConfig.import(url)
+                val count = vodConfig.import(targetUrl)
                 val msg = if (count == 0) "已切换至网页订阅源" else "订阅切换成功（共 $count 个站点）"
-                _uiState.update { it.copy(message = msg) }
+                vodConfig.notifySubscriptionMessage(msg)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _uiState.update { it.copy(message = "订阅切换失败：${NodeRuntime.describe(e)}") }
+                val msg = if (NodeClient.isInterrupted(e)) "已取消切换" else "订阅切换失败：${NodeRuntime.describe(e)}"
+                vodConfig.notifySubscriptionMessage(msg)
+            } finally {
+                isSwitchingSubscription = false
             }
         }
     }
@@ -494,11 +561,21 @@ class HomeViewModel @Inject constructor(
             try {
                 val count = vodConfig.reload()
                 val msg = if (count == 0) "网页订阅源已刷新" else "订阅刷新成功（共 $count 个站点）"
-                _uiState.update {
-                    it.copy(
-                        isRefreshingSubscription = false,
-                        message = msg,
-                    )
+                if (count == 0) {
+                    vodConfig.notifySubscriptionMessage(msg)
+                    _uiState.update {
+                        it.copy(
+                            isRefreshingSubscription = false,
+                            message = null,
+                        )
+                    }
+                } else {
+                    _uiState.update {
+                        it.copy(
+                            isRefreshingSubscription = false,
+                            message = msg,
+                        )
+                    }
                 }
             } catch (e: Exception) {
                 val msg = if (e is IllegalArgumentException) {

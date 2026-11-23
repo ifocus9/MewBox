@@ -117,7 +117,7 @@ class SubscriptionCoordinator @Inject constructor(
             configId = configId,
             replaceUrl = replaceUrl,
         )
-        val msg = if (count == 0) "已导入网页订阅源" else "导入成功：$count 个站点"
+        val msg = if (count == 0) "已切换至网页订阅源" else "订阅切换成功（共 $count 个站点）"
         return ActionResult.Imported(
             message = msg,
             loadedUrl = targetUrl,

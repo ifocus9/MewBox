@@ -3,20 +3,27 @@ package com.mewbox.tv.ui.history
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -33,7 +40,8 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -60,9 +68,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlin.math.abs
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
@@ -71,9 +84,13 @@ import com.mewbox.tv.api.douban.WishStatus
 import com.mewbox.tv.bean.History
 import com.mewbox.tv.ui.components.EmptyState
 import com.mewbox.tv.ui.components.LoadingState
+import com.mewbox.tv.ui.components.LocalMewOverlayDismiss
+import com.mewbox.tv.ui.components.MewOverlayVariant
+import com.mewbox.tv.ui.components.MewSheetShell
+import com.mewbox.tv.ui.components.OverlayTokens
 import com.mewbox.tv.ui.components.PosterPlaceholder
 import com.mewbox.tv.ui.components.glassTopBarSurface
-import com.mewbox.tv.ui.theme.OrangeBadge
+import com.mewbox.tv.ui.theme.MewBoxTheme
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -93,7 +110,7 @@ fun HistoryScreen(
     val pagerState = rememberPagerState(initialPage = segment, pageCount = { 2 })
     var isProgrammaticScroll by remember { mutableStateOf(false) }
 
-    // 点击分段胶囊时同步平滑滑动到对应页
+    // 点击顶部文字 Tab 时同步平滑滑动到对应页
     LaunchedEffect(segment) {
         if (pagerState.currentPage != segment) {
             isProgrammaticScroll = true
@@ -105,7 +122,7 @@ fun HistoryScreen(
         }
     }
 
-    // 左右滑动页面时同步更新分段选中态
+    // 左右滑动页面时同步更新 Tab 选中态
     LaunchedEffect(pagerState) {
         snapshotFlow { pagerState.currentPage }
             .collect { page ->
@@ -130,7 +147,18 @@ fun HistoryScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (isDeleteMode) "管理记录" else "追剧") },
+                title = {
+                    if (isDeleteMode) {
+                        Text("管理记录")
+                    } else {
+                        // 文字 Tab 直接占用标题位，与右侧删除/同步按钮同一行，省掉原来单独一行分段条
+                        HistoryTextTabs(
+                            selectedIndex = segment,
+                            wishCount = wishState.total,
+                            onSelect = { segment = it },
+                        )
+                    }
+                },
                 navigationIcon = {
                     if (isDeleteMode) {
                         Box(
@@ -144,6 +172,7 @@ fun HistoryScreen(
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                                 contentDescription = "退出管理",
+                                tint = MaterialTheme.colorScheme.onSurface,
                                 modifier = Modifier.size(20.dp),
                             )
                         }
@@ -190,7 +219,7 @@ fun HistoryScreen(
                             modifier = Modifier
                                 .padding(end = 8.dp)
                                 .size(40.dp)
-                                .glassTopBarSurface(CircleShape, MaterialTheme.colorScheme.surfaceBright)
+                                .glassTopBarSurface(CircleShape, MaterialTheme.colorScheme.surfaceBright )
                                 .clickable { showClearDialog = true },
                             contentAlignment = Alignment.Center,
                         ) {
@@ -198,6 +227,7 @@ fun HistoryScreen(
                                 imageVector = Icons.Default.Delete,
                                 contentDescription = "清空历史",
                                 modifier = Modifier.size(20.dp),
+                                tint = MaterialTheme.colorScheme.onSurface
                             )
                         }
                     }
@@ -216,27 +246,6 @@ fun HistoryScreen(
                 .padding(padding),
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
-                // 顶部分段切换（删除模式属于播放记录的局部状态，进入时隐藏分段避免焦点跨栏）
-                if (!isDeleteMode) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        SegmentPill(
-                            text = "播放记录",
-                            selected = segment == 0,
-                            onClick = { segment = 0 },
-                        )
-                        SegmentPill(
-                            text = if (wishState.total > 0) "豆瓣想看 ${wishState.total}" else "豆瓣想看",
-                            selected = segment == 1,
-                            onClick = { segment = 1 },
-                        )
-                    }
-                }
-
                 HorizontalPager(
                     state = pagerState,
                     userScrollEnabled = !isDeleteMode,
@@ -296,49 +305,195 @@ fun HistoryScreen(
         }
     }
 
-    // 清空当前订阅历史确认弹窗
+    // 清空当前订阅历史底部确认抽屉
     if (showClearDialog) {
-        AlertDialog(
-            onDismissRequest = { showClearDialog = false },
-            title = { Text("清空播放历史") },
-            text = { Text("确定要清除当前订阅下的所有播放历史记录吗？此操作不可恢复。") },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        viewModel.clearAll()
-                        showClearDialog = false
-                    },
-                ) {
-                    Text("清空", color = MaterialTheme.colorScheme.error)
-                }
+        ClearHistorySheet(
+            onConfirm = {
+                viewModel.clearAll()
+                showClearDialog = false
             },
-            dismissButton = {
-                TextButton(onClick = { showClearDialog = false }) {
-                    Text("取消")
-                }
-            },
+            onDismiss = { showClearDialog = false },
         )
     }
 }
 
-/** 追剧页顶部分段切换 pill：选中态用主题主色胶囊。 */
 @Composable
-private fun SegmentPill(
-    text: String,
-    selected: Boolean,
-    onClick: () -> Unit,
+private fun ClearHistorySheet(
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
 ) {
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerLow,
-        contentColor = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.clickable(onClick = onClick),
+    MewSheetShell(
+        onDismiss = onDismiss,
+        variant = MewOverlayVariant.Light,
+    ) { focusModifier ->
+        val dismiss = LocalMewOverlayDismiss.current ?: onDismiss
+        Column(
+            modifier = focusModifier
+                .fillMaxWidth()
+                .padding(horizontal = OverlayTokens.Padding)
+                .navigationBarsPadding()
+                .padding(bottom = 16.dp),
+        ) {
+            Text(
+                text = "清空播放历史",
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Bold,
+                color = OverlayTokens.DialogTitle,
+            )
+
+            Spacer(Modifier.height(10.dp))
+
+            Text(
+                text = "确定要清除当前订阅下的所有播放历史记录吗？此操作不可恢复。",
+                fontSize = 14.sp,
+                color = OverlayTokens.TextSecondary,
+                lineHeight = 20.sp,
+            )
+
+            Spacer(Modifier.height(20.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Button(
+                    onClick = dismiss,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(44.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = OverlayTokens.SheetItemBg,
+                        contentColor = OverlayTokens.OutlinedText,
+                    ),
+                    elevation = ButtonDefaults.buttonElevation(0.dp, 0.dp),
+                ) {
+                    Text("取消", fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                }
+
+                Button(
+                    onClick = onConfirm,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(44.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                    ),
+                    elevation = ButtonDefaults.buttonElevation(0.dp, 0.dp),
+                ) {
+                    Text("清空", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+    }
+}
+
+/* ---------------- 追剧页顶部文字 Tab ---------------- */
+
+/** 文字 Tab 行高度：放进 TopAppBar 的 title 位，与右侧删除/同步按钮同一行。 */
+private val HistoryTabRowHeight = 44.dp
+
+/** 两个 Tab 之间的间距：紧凑排列，不撑满整行。 */
+private val HistoryTabSpacing = 24.dp
+
+/**
+ * 追剧页顶部文字 Tab：选中项主色文字 + 底部红色指示条。
+ *
+ * Tab 按文字实际宽度靠左紧凑排列（不是等分整行），指示条测量每个 Tab 的真实边界后
+ * 用 offset 动画贴合，宽度与文字等宽。占用 TopAppBar.title 不额外占行。
+ */
+@Composable
+private fun HistoryTextTabs(
+    selectedIndex: Int,
+    wishCount: Int,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val labels = listOf("播放记录", "豆瓣想看")
+    val accent = MaterialTheme.colorScheme.primary
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val density = LocalDensity.current
+
+    // 测量每个 Tab 的横向位置与宽度（相对本组件左边缘），指示条据此贴合真实文字
+    var bounds0 by remember { mutableStateOf<Pair<Float, Float>?>(null) }
+    var bounds1 by remember { mutableStateOf<Pair<Float, Float>?>(null) }
+    val selectedBounds = if (selectedIndex == 0) bounds0 else bounds1
+
+    val indicatorX by animateDpAsState(
+        targetValue = selectedBounds?.let { with(density) { it.first.toDp() } } ?: 0.dp,
+        animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing),
+        label = "HistoryTabIndicatorX",
+    )
+    val indicatorWidth by animateDpAsState(
+        targetValue = selectedBounds?.let { with(density) { it.second.toDp() } } ?: 0.dp,
+        animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing),
+        label = "HistoryTabIndicatorWidth",
+    )
+
+    Box(
+        modifier = modifier
+            .height(HistoryTabRowHeight),
     ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelLarge,
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .offset(x = indicatorX, y = (-8).dp)
+                .width(indicatorWidth)
+                .height(3.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(accent),
         )
+
+        Row(
+            modifier = Modifier.fillMaxSize(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(HistoryTabSpacing),
+        ) {
+            labels.forEachIndexed { index, label ->
+                val selected = index == selectedIndex
+                val color by animateColorAsState(
+                    targetValue = if (selected) accent else muted,
+                    animationSpec = tween(durationMillis = 200),
+                    label = "HistoryTabText$index",
+                )
+                Box(
+                    modifier = Modifier
+                        .onGloballyPositioned { coords ->
+                            val x = coords.positionInParent().x
+                            val w = coords.size.width.toFloat()
+                            val old = if (index == 0) bounds0 else bounds1
+                            if (old == null || abs(old.first - x) > 1f || abs(old.second - w) > 1f) {
+                                if (index == 0) bounds0 = x to w else bounds1 = x to w
+                            }
+                        }
+                        .clickable(onClickLabel = label) { onSelect(index) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                            color = color,
+                            maxLines = 1,
+                        )
+                        if (index == 1 && wishCount > 0) {
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                text = if (wishCount > 999) "999+" else wishCount.toString(),
+                                fontSize = 11.sp,
+                                lineHeight = 14.sp,
+                                color = color.copy(alpha = 0.7f),
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -411,6 +566,7 @@ private fun HistoryItemCard(
                     text = history.vodName,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -420,12 +576,12 @@ private fun HistoryItemCard(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Surface(
                         shape = RoundedCornerShape(4.dp),
-                        color = OrangeBadge,
+                        color = MewBoxTheme.colors.primarySoftBg,
                     ) {
                         Text(
                             text = history.siteName.ifEmpty { history.siteKey },
                             style = MaterialTheme.typography.labelSmall,
-                            color = Color.White,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                         )
                     }
@@ -470,18 +626,14 @@ private fun HistoryItemCard(
                 Text(
                     text = HistoryViewModel.formatProgress(history.position, history.duration),
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
 
             // 右侧动作按钮：始终固定占位（36dp），只在图标/配色间切换，
             // 避免进入删除模式时横向展开挤压左侧的剧集信息
             val actionContainerColor by animateColorAsState(
-                targetValue = if (isDeleteMode) {
-                    MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.8f)
-                } else {
-                    MaterialTheme.colorScheme.primaryContainer
-                },
+                targetValue = MaterialTheme.colorScheme.primaryContainer,
                 label = "HistoryActionContainerColor",
             )
             Box(
@@ -505,11 +657,7 @@ private fun HistoryItemCard(
                     Icon(
                         imageVector = if (deleteMode) Icons.Default.DeleteOutline else Icons.Default.PlayArrow,
                         contentDescription = if (deleteMode) "删除" else "播放",
-                        tint = if (deleteMode) {
-                            MaterialTheme.colorScheme.error
-                        } else {
-                            MaterialTheme.colorScheme.onPrimaryContainer
-                        },
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
                         modifier = Modifier.size(20.dp),
                     )
                 }

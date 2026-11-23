@@ -17,16 +17,23 @@ private const val TOAST_BOTTOM_OFFSET_DP = 64f
 /**
  * 软件全局 Toast 提示分发器
  *
- * 只接管「背景色固定为白色」这一件事：用系统 Toast 窗口承载一个自绘白底圆角 View，
- * 显隐动画、位置、时长、排队与窗口层级全部交回系统托管，不随系统深色模式变色。
+ * 用系统 Toast 窗口承载自绘圆角胶囊 View，跟随应用当前深浅主题配色，
+ * 显隐动画、位置、时长、排队与窗口层级全部交回系统托管。
  */
 object AppToast {
     private val mainHandler = Handler(Looper.getMainLooper())
     private lateinit var appContext: Context
 
+    @Volatile
+    private var darkTheme: Boolean = false
+
     /** 由 MewBoxApp.onCreate() 注入，必须早于任何 show() 调用 */
     fun init(context: Context) {
         appContext = context.applicationContext
+    }
+
+    fun setDarkTheme(isDark: Boolean) {
+        darkTheme = isDark
     }
 
     fun show(message: String?, isLong: Boolean = false) {
@@ -40,9 +47,14 @@ object AppToast {
     @Suppress("DEPRECATION")
     private fun showSystemToast(text: String, isLong: Boolean) {
         val density = appContext.resources.displayMetrics.density
+        val isDark = darkTheme
+        val textColor = if (isDark) Color.rgb(0xF2, 0xF4, 0xF8) else Color.rgb(0x16, 0x18, 0x1D)
+        val bgColor = if (isDark) Color.rgb(0x25, 0x28, 0x31) else Color.WHITE
+        val borderColor = if (isDark) Color.argb(0x1F, 0xFF, 0xFF, 0xFF) else Color.argb(0x16, 0x0F, 0x17, 0x2A)
+
         val view = TextView(appContext).apply {
             this.text = text
-            setTextColor(Color.rgb(0x1C, 0x1C, 0x1E))
+            setTextColor(textColor)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             gravity = Gravity.CENTER
             minWidth = (96 * density).toInt()
@@ -53,11 +65,11 @@ object AppToast {
             val vertical = (14 * density).toInt()
             setPadding(horizontal, vertical, horizontal, vertical)
             background = GradientDrawable().apply {
-                setColor(Color.WHITE)
+                setColor(bgColor)
                 cornerRadius = 16f * density
                 setStroke(
                     (0.5f * density).toInt().coerceAtLeast(1),
-                    Color.argb(0x10, 0, 0, 0),
+                    borderColor,
                 )
             }
         }

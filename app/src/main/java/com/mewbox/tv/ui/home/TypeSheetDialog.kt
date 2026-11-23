@@ -1,10 +1,6 @@
 package com.mewbox.tv.ui.home
 
-import com.mewbox.tv.ui.components.MewOverlayVariant
-import com.mewbox.tv.ui.components.MewSheetShell
-import com.mewbox.tv.ui.components.OverlayTokens
-
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -19,29 +15,28 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.kyant.capsule.ContinuousCapsule
 import com.mewbox.tv.bean.VodFilter
 import com.mewbox.tv.bean.VodFilterValue
+import com.mewbox.tv.ui.components.MewOverlayVariant
+import com.mewbox.tv.ui.components.MewSheetShell
+import com.mewbox.tv.ui.components.OverlayTokens
+import com.mewbox.tv.ui.theme.MewBoxTheme
 
 /**
- * 分类筛选底部抽屉（复用原全部分类底部面板，按筛选维度横向排布选项胶囊）
+ * 分类筛选底部抽屉（对齐全局抽屉视觉规范：标题+柔粉重置按钮，浅粉柔边选中胶囊）
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TypeSheetDialog(
     filters: List<VodFilter>,
@@ -66,19 +61,27 @@ fun TypeSheetDialog(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
+                Text(
+                    text = "筛选",
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = OverlayTokens.DialogTitle,
+                )
+
                 if (showReset) {
-                    Text(
-                        text = "重置",
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            fontSize = 14.sp,
+                    Surface(
+                        onClick = onReset,
+                        shape = ContinuousCapsule,
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                    ) {
+                        Text(
+                            text = "重置",
+                            fontSize = 13.sp,
                             fontWeight = FontWeight.Medium,
-                        ),
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable { onReset() }
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
-                    )
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+                        )
+                    }
                 }
             }
 
@@ -128,7 +131,7 @@ private fun FilterGroupRow(
                     fontSize = 12.5.sp,
                     fontWeight = FontWeight.Medium,
                 ),
-                color = Color(0xFF6B7280),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -146,26 +149,29 @@ private fun FilterGroupRow(
             ) { item ->
                 val isSelected = selectedValue == item.v
                 Surface(
+                    onClick = { onSelect(item) },
                     shape = RoundedCornerShape(10.dp),
                     color = if (isSelected) {
-                        MaterialTheme.colorScheme.primary
+                        MaterialTheme.colorScheme.primaryContainer
                     } else {
-                        MaterialTheme.colorScheme.surfaceVariant
+                        OverlayTokens.SheetItemBg
                     },
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .clickable { onSelect(item) },
+                    border = if (isSelected) {
+                        BorderStroke(0.8.dp, MewBoxTheme.colors.primaryBorder)
+                    } else {
+                        null
+                    },
                 ) {
                     Text(
                         text = item.n,
                         style = MaterialTheme.typography.bodyMedium.copy(
                             fontSize = 13.5.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
                         ),
                         color = if (isSelected) {
-                            Color.White
+                            MaterialTheme.colorScheme.onPrimaryContainer
                         } else {
-                            MaterialTheme.colorScheme.onSurface
+                            OverlayTokens.TextPrimary
                         },
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,

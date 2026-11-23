@@ -27,6 +27,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
@@ -40,7 +41,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mewbox.tv.bean.Episode
-import com.mewbox.tv.ui.theme.BluePrimary
+import com.mewbox.tv.ui.theme.MewBoxTheme
 import com.mewbox.tv.util.EpisodeTitleCompact
 import kotlinx.coroutines.launch
 import androidx.compose.material3.MaterialTheme
@@ -62,8 +63,11 @@ internal val PillBorderColor = Color(0x33FFFFFF)
 
 internal val PanelTextPrimary = Color.White
 
-/** 选集抽屉固定采用系统主色，不联动海报主题色 */
-internal val PanelAccent: Color = BluePrimary
+/** 选集抽屉固定采用全局主题色，不联动海报主题色 */
+internal val PanelAccent: Color
+    @Composable
+    @ReadOnlyComposable
+    get() = MewBoxTheme.colors.panelAccent
 
 /** 次要文字（共N条 / 全N集）：@color/selector_player_panel_tab_text */
 internal val PanelTextMeta = Color(0x99FFFFFF)
@@ -88,15 +92,21 @@ data class EpisodePickerColors(
 )
 
 /** 播放页右侧抽屉默认配色：选中态为半透明主色底 + 主色文字，参考芒果TV选集抽屉；不传 colors 即用此值 */
-val PanelPickerColors = EpisodePickerColors(
-    pill = PillColor,
-    pillBorder = PillBorderColor,
-    textPrimary = PanelTextPrimary,
-    textMeta = PanelTextMeta,
-    accent = PanelAccent,
-    selectedBg = PanelAccent.copy(alpha = 0.28f),
-    selectedText = PanelAccent,
-)
+val PanelPickerColors: EpisodePickerColors
+    @Composable
+    @ReadOnlyComposable
+    get() {
+        val accent = PanelAccent
+        return EpisodePickerColors(
+            pill = PillColor,
+            pillBorder = PillBorderColor,
+            textPrimary = PanelTextPrimary,
+            textMeta = PanelTextMeta,
+            accent = accent,
+            selectedBg = accent.copy(alpha = 0.28f),
+            selectedText = accent,
+        )
+    }
 
 /** 单集卡片高度：一集占一整行 */
 private const val EPISODE_ITEM_HEIGHT = 40

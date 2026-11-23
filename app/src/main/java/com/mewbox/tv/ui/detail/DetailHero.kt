@@ -1,15 +1,7 @@
 package com.mewbox.tv.ui.detail
 
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -27,16 +19,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.wrapContentSize
-import androidx.compose.foundation.layout.wrapContentWidth
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.PagerState
-import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsIgnoringVisibility
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.wrapContentSize
+import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -51,10 +41,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -68,6 +57,7 @@ import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
@@ -75,25 +65,21 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import coil3.compose.AsyncImagePainter
-import com.kyant.backdrop.backdrops.layerBackdrop
-import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.mewbox.tv.api.tmdb.TmdbClient
 import com.mewbox.tv.api.tmdb.bean.TmdbDetail
 import com.mewbox.tv.bean.Vod
-import com.mewbox.tv.ui.components.LocalTopBarGlassBackdrop
 import com.mewbox.tv.ui.components.PosterPlaceholder
-import com.mewbox.tv.ui.components.glassTopBarSurface
-import com.mewbox.tv.ui.theme.LiquidGlassDefaults
 import kotlinx.coroutines.delay
 import java.util.Locale
+import kotlin.math.abs
 
 private const val DetailTopScrimAlpha = 0.32f
 private const val HERO_IMAGE_HEIGHT_RATIO = 0.50f
 private const val HERO_ROLL_INTERVAL_MS = 5000L
-private const val HERO_ROLL_ANIM_MS = 300
 private val HeroImageMinHeight = 280.dp
 private val HeroImageMaxHeight = 460.dp
 private val HeroContentHorizontalPadding = 16.dp
@@ -120,6 +106,12 @@ private val DetailHeroFadeStops = arrayOf(
     1f to 1f,
 )
 
+private val DetailHeroFadeMaskBrush = Brush.verticalGradient(
+    *DetailHeroFadeStops
+        .map { (position, alpha) -> position to Color.White.copy(alpha = 1f - alpha) }
+        .toTypedArray(),
+)
+
 /**
  * 顶部状态栏渐变遮罩（完全对齐 AVBox DetailTopScrim）
  */
@@ -136,6 +128,34 @@ internal fun DetailTopScrim(modifier: Modifier = Modifier, alpha: Float = 1f) {
                     1f to Color.Transparent,
                 ),
             ),
+    )
+}
+
+/**
+ * 页面上滑浏览信息区时顶部浮现的动态主题色渐变遮罩，避免滚动内容与悬浮工具栏生硬冲突
+ */
+@Composable
+internal fun DetailScrollTopScrim(
+    alphaProvider: () -> Float,
+    modifier: Modifier = Modifier,
+) {
+    val statusTop = with(LocalDensity.current) {
+        WindowInsets.statusBarsIgnoringVisibility.getTop(this).toDp()
+    }
+    val surfaceColor = MaterialTheme.colorScheme.surface
+    val scrimBrush = remember(surfaceColor) {
+        Brush.verticalGradient(
+            0f to surfaceColor.copy(alpha = 0.82f),
+            0.55f to surfaceColor.copy(alpha = 0.45f),
+            1f to Color.Transparent,
+        )
+    }
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(statusTop + 58.dp)
+            .graphicsLayer { alpha = alphaProvider() }
+            .background(scrimBrush),
     )
 }
 
@@ -193,10 +213,72 @@ fun DetailTopBar(
     }
 }
 
+@Composable
+internal fun rememberHeroImageHeight(): Dp {
+    val configuration = LocalConfiguration.current
+    return (configuration.screenHeightDp * HERO_IMAGE_HEIGHT_RATIO)
+        .dp
+        .coerceIn(HeroImageMinHeight, HeroImageMaxHeight)
+}
+
 /**
- * 大海报 Hero 区域（完全对齐 AVBox DetailHero）
- * - 大海报淡化下边缘融合
- * - TMDB Logo 或片名
+ * 大海报背景图层：
+ * - 顶部锚定屏幕顶端，下拉时围绕顶部中心等比平滑放大，底部渐变融合边同步延展
+ * - 上滑时解耦列表并以 0.30x 视差慢速上移 + Smoothstep 平滑淡出，与底层虚化背景自然融合
+ */
+@Composable
+internal fun DetailHeroPosterLayer(
+    vod: Vod,
+    urls: List<String>,
+    pagerState: PagerState,
+    imageHeight: Dp,
+    scrollOffsetPxProvider: () -> Float,
+    pullDownPxProvider: () -> Float,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(imageHeight)
+            .graphicsLayer {
+                val scrollPx = scrollOffsetPxProvider()
+                val pullPx = pullDownPxProvider()
+                val heroHeightPx = size.height
+                val scale = computeHeroPosterScale(pullPx, heroHeightPx)
+                scaleX = scale
+                scaleY = scale
+                transformOrigin = TransformOrigin(0.5f, 0f)
+                translationY = computeHeroPosterTranslationY(scrollPx, pullPx, heroHeightPx)
+                alpha = computeHeroPosterAlpha(scrollPx, pullPx, heroHeightPx)
+            },
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                .drawWithContent {
+                    drawContent()
+                    drawRect(
+                        brush = DetailHeroFadeMaskBrush,
+                        blendMode = BlendMode.DstIn,
+                    )
+                },
+        ) {
+            DetailHeroPosterMedia(
+                vod = vod,
+                urls = urls,
+                pagerState = pagerState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clipToBounds(),
+            )
+        }
+    }
+}
+
+/**
+ * 大海报 Hero 前景内容（位于 LazyColumn 首项，与底层 [DetailHeroPosterLayer] 解耦联动）
+ * - 顶部透明区域承接水平轮播手势并在底部居中展示 TMDB Logo 或片名
  * - ⭐ 评分 + 年份 · 地区 · 分类 · 备注
  * - 可折叠简介
  * - 播放胶囊大按钮
@@ -207,38 +289,15 @@ fun DetailHero(
     tmdbDetail: TmdbDetail?,
     tmdbImageBase: String,
     resumeEpisodeText: String?,
+    imageHeight: Dp,
+    urls: List<String>,
+    pagerState: PagerState,
+    isAutoRollAllowed: () -> Boolean,
     onPlay: () -> Unit,
     modifier: Modifier = Modifier,
     hasPlayableRoutes: Boolean = true,
-    quickBackdrop: String? = null,
-    quickPoster: String? = null,
     onTitleLongClick: (() -> Unit)? = null,
 ) {
-    val configuration = LocalConfiguration.current
-    val imageHeight = (configuration.screenHeightDp * HERO_IMAGE_HEIGHT_RATIO)
-        .dp
-        .coerceIn(HeroImageMinHeight, HeroImageMaxHeight)
-
-    // 收集所有可用图片路径（TMDB 背景与海报优先，仅无 TMDB 图时回退站点海报）
-    val urls = remember(tmdbDetail, vod.vodPic, quickBackdrop, quickPoster) {
-        detailPosterUrls(vod, tmdbDetail, tmdbImageBase, quickBackdrop, quickPoster)
-    }
-
-    val pagerState = rememberPagerState(pageCount = { urls.size.coerceAtLeast(1) })
-
-    // 自动轮播（若存在多张高清海报/剧照且用户未处于手势拖拽中）
-    if (urls.size > 1) {
-        LaunchedEffect(pagerState, urls.size) {
-            while (true) {
-                delay(HERO_ROLL_INTERVAL_MS)
-                if (!pagerState.isScrollInProgress) {
-                    val next = (pagerState.currentPage + 1) % urls.size
-                    pagerState.animateScrollToPage(next)
-                }
-            }
-        }
-    }
-
     // 评分信息
     val ratingText = tmdbDetail?.voteAverage
         ?.takeIf { it > 0.0 }
@@ -260,43 +319,35 @@ fun DetailHero(
     val descriptionText = tmdbDetail?.overview?.takeIf { it.isNotBlank() }
         ?: vod.vodContent.takeIf { it.isNotBlank() }
     var descriptionExpanded by rememberSaveable(vod.vodId) { mutableStateOf(false) }
-    val glassBackdrop = rememberLayerBackdrop(onDraw = { drawContent() })
 
     Column(modifier = modifier.fillMaxWidth()) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(imageHeight)
-                .clipToBounds(),
+                .height(imageHeight),
         ) {
-            // 1. 大海报图片层（下边缘平滑透明度衰减，支持手势滑动切换）
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-                    .drawWithContent {
-                        drawContent()
-                        drawRect(
-                            brush = Brush.verticalGradient(
-                                *DetailHeroFadeStops
-                                    .map { (position, alpha) -> position to Color.White.copy(alpha = 1f - alpha) }
-                                    .toTypedArray(),
-                            ),
-                            blendMode = BlendMode.DstIn,
-                        )
-                    },
-            ) {
-                Box(modifier = Modifier.fillMaxSize().layerBackdrop(glassBackdrop)) {
-                    DetailHeroPoster(
-                        vod = vod,
-                        urls = urls,
-                        pagerState = pagerState,
-                        modifier = Modifier.fillMaxSize(),
-                    )
+            // 仅由单个透明 HorizontalPager 接收横向手势并驱动 PagerState；
+            // 背景层只读 pagerState 偏移做位移动画，避免双 HorizontalPager 共用同一 PagerState 冲突。
+            if (urls.size > 1) {
+                LaunchedEffect(pagerState, urls.size) {
+                    while (true) {
+                        delay(HERO_ROLL_INTERVAL_MS)
+                        if (!pagerState.isScrollInProgress && isAutoRollAllowed()) {
+                            val next = (pagerState.currentPage + 1) % urls.size
+                            pagerState.animateScrollToPage(next)
+                        }
+                    }
+                }
+                HorizontalPager(
+                    state = pagerState,
+                    overscrollEffect = null,
+                    modifier = Modifier.fillMaxSize(),
+                ) {
+                    Box(modifier = Modifier.fillMaxSize())
                 }
             }
 
-            // 2. 海报底部：TMDB Logo 或 标题
+            // 海报底部：TMDB Logo 或标题
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -317,7 +368,7 @@ fun DetailHero(
             }
         }
 
-        // 4. Hero 元信息与主操作块
+        // Hero 元信息与主操作块
         DetailHeroInfoBlock(
             ratingText = ratingText,
             metaTail = metaTail,
@@ -389,10 +440,10 @@ internal fun detailPosterUrls(
 }
 
 /**
- * 海报手势轮播/背景图（完全对齐 AVBox DetailHeroPoster，支持横向手势拖拽滑动切换）
+ * 背景大海报图片渲染：通过读取 [pagerState] 偏移仅渲染当前与相邻页，实现零重组横滑切换
  */
 @Composable
-private fun DetailHeroPoster(
+private fun DetailHeroPosterMedia(
     vod: Vod,
     urls: List<String>,
     pagerState: PagerState,
@@ -408,83 +459,77 @@ private fun DetailHeroPoster(
     }
 
     if (urls.size == 1) {
-        val targetUrl = urls[0]
-        var currentUrl by remember(targetUrl) { mutableStateOf(targetUrl) }
-        var hasFallenBack by remember(targetUrl) { mutableStateOf(false) }
-        var isError by remember(targetUrl) { mutableStateOf(false) }
-        Box(
-            modifier = modifier
-                .fillMaxSize()
-                .background(MaterialTheme.colorScheme.surfaceContainerLowest),
-        ) {
-            if (isError) {
-                PosterPlaceholder(
-                    title = vod.vodName,
-                    isHero = true,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            } else {
-                AsyncImage(
-                    model = currentUrl,
-                    contentDescription = vod.vodName,
-                    contentScale = ContentScale.Crop,
-                    onState = { state ->
-                        if (state is AsyncImagePainter.State.Error) {
-                            val fallback = TmdbClient.resolveFallbackImageUrl(currentUrl)
-                            if (!hasFallenBack && fallback != null && fallback != currentUrl) {
-                                hasFallenBack = true
-                                currentUrl = fallback
-                            } else {
-                                isError = true
-                            }
-                        }
-                    },
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
-        }
+        HeroPosterImage(
+            vodName = vod.vodName,
+            targetUrl = urls[0],
+            modifier = modifier.fillMaxSize(),
+        )
         return
     }
 
-    HorizontalPager(
-        state = pagerState,
-        beyondViewportPageCount = 1,
-        modifier = modifier.fillMaxSize(),
-    ) { page ->
-        val targetUrl = urls[page]
-        var currentUrl by remember(targetUrl) { mutableStateOf(targetUrl) }
-        var hasFallenBack by remember(targetUrl) { mutableStateOf(false) }
-        var isError by remember(targetUrl) { mutableStateOf(false) }
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(MaterialTheme.colorScheme.surfaceContainerLowest),
-        ) {
-            if (isError) {
-                PosterPlaceholder(
-                    title = vod.vodName,
-                    isHero = true,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            } else {
-                AsyncImage(
-                    model = currentUrl,
-                    contentDescription = vod.vodName,
-                    contentScale = ContentScale.Crop,
-                    onState = { state ->
-                        if (state is AsyncImagePainter.State.Error) {
-                            val fallback = TmdbClient.resolveFallbackImageUrl(currentUrl)
-                            if (!hasFallenBack && fallback != null && fallback != currentUrl) {
-                                hasFallenBack = true
-                                currentUrl = fallback
-                            } else {
-                                isError = true
-                            }
-                        }
-                    },
-                    modifier = Modifier.fillMaxSize(),
+    val current = pagerState.currentPage.coerceIn(0, urls.lastIndex)
+    val startPage = (current - 1).coerceAtLeast(0)
+    val endPage = (current + 1).coerceAtMost(urls.lastIndex)
+
+    Box(modifier = modifier.fillMaxSize()) {
+        for (page in startPage..endPage) {
+            val url = urls[page]
+            key(page, url) {
+                HeroPosterImage(
+                    vodName = vod.vodName,
+                    targetUrl = url,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            val pageOffset = (page - pagerState.currentPage) - pagerState.currentPageOffsetFraction
+                            translationX = pageOffset * size.width
+                            alpha = if (abs(pageOffset) >= 1.05f) 0f else 1f
+                        },
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun HeroPosterImage(
+    vodName: String,
+    targetUrl: String,
+    modifier: Modifier = Modifier,
+) {
+    var currentUrl by remember(targetUrl) { mutableStateOf(targetUrl) }
+    var hasFallenBack by remember(targetUrl) { mutableStateOf(false) }
+    var isError by remember(targetUrl) { mutableStateOf(false) }
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.surfaceContainerLowest),
+    ) {
+        if (isError) {
+            PosterPlaceholder(
+                title = vodName,
+                isHero = true,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            AsyncImage(
+                model = currentUrl,
+                contentDescription = vodName,
+                contentScale = ContentScale.Crop,
+                onState = { state ->
+                    if (state is AsyncImagePainter.State.Error) {
+                        val fallback = TmdbClient.resolveFallbackImageUrl(currentUrl)
+                        if (!hasFallenBack && fallback != null && fallback != currentUrl) {
+                            hasFallenBack = true
+                            currentUrl = fallback
+                        } else {
+                            isError = true
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxSize(),
+            )
         }
     }
 }

@@ -74,6 +74,7 @@ import com.kyant.backdrop.shadow.InnerShadow
 import com.kyant.backdrop.shadow.Shadow
 import com.kyant.capsule.ContinuousCapsule
 import com.mewbox.tv.ui.theme.LiquidGlassConfig
+import com.mewbox.tv.ui.theme.MewBoxTheme
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -152,9 +153,17 @@ fun FloatingNavBar(
     val isHorizontal = axis == NavAxis.Horizontal
 
     val accentColor = MaterialTheme.colorScheme.primary
-    val containerColor = MaterialTheme.colorScheme.surfaceContainer.copy(
-        alpha = if (isBlurEnabled) 0.55f * config.containerAlphaScale else 1f
-    )
+    val isDark = MewBoxTheme.isDark
+    val pillColor = MewBoxTheme.colors.navPillIndicator
+    val containerColor = if (isDark) {
+        MaterialTheme.colorScheme.surfaceContainerHigh.copy(
+            alpha = if (isBlurEnabled) 0.72f * config.containerAlphaScale else 1f
+        )
+    } else {
+        MaterialTheme.colorScheme.surfaceBright.copy(
+            alpha = if (isBlurEnabled) 0.65f * config.containerAlphaScale else 1f
+        )
+    }
 
     val tabsBackdrop = rememberLayerBackdrop()
     val density = LocalDensity.current
@@ -319,11 +328,13 @@ fun FloatingNavBar(
                         }
                     },
                     highlight = {
-                        Highlight.Default.copy(alpha = if (isBlurEnabled) 1f else 0f)
+                        Highlight.Default.copy(
+                            alpha = if (isBlurEnabled) (if (isDark) 0.45f else 1f) else 0f
+                        )
                     },
                     shadow = {
                         Shadow.Default.copy(
-                            color = Color.Black.copy(0.1f)
+                            color = Color.Black.copy(if (isDark) 0.35f else 0.1f)
                         )
                     },
                     layerBlock = {
@@ -493,10 +504,10 @@ fun FloatingNavBar(
                         onDrawSurface = {
                             val progress = if (isBlurEnabled) dampedDragAnimation.pressProgress else 0f
                             drawRect(
-                                Color.Black.copy(0.1f),
+                                pillColor,
                                 alpha = 1f - progress
                             )
-                            drawRect(Color.Black.copy(alpha = 0.03f * progress))
+                            drawRect(pillColor.copy(alpha = (if (isDark) 0.08f else 0.03f) * progress))
                         }
                     )
                     .crossAxisSize(axis, NavMetrics.SLOT_MAIN_DP.dp)
@@ -590,9 +601,9 @@ private fun NavTabItem(
 ) {
     val scale = LocalNavTabScale.current
     val iconColor = if (selected) MaterialTheme.colorScheme.onSecondaryContainer
-    else MaterialTheme.colorScheme.onSurfaceVariant
+    else MaterialTheme.colorScheme.onSurface
     val textColor = if (selected) MaterialTheme.colorScheme.onSecondaryContainer
-    else MaterialTheme.colorScheme.onSurfaceVariant
+    else MaterialTheme.colorScheme.onSurface
     Column(
         modifier = modifier
             .clip(ContinuousCapsule)
@@ -653,9 +664,16 @@ fun FloatingNavSearchButton(
     modifier: Modifier = Modifier,
 ) {
     val isBlurEnabled = config.navbarEnabled
-    val containerColor = MaterialTheme.colorScheme.surfaceContainer.copy(
-        alpha = if (isBlurEnabled) 0.55f * config.containerAlphaScale else 1f
-    )
+    val isDark = MewBoxTheme.isDark
+    val containerColor = if (isDark) {
+        MaterialTheme.colorScheme.surfaceContainerHigh.copy(
+            alpha = if (isBlurEnabled) 0.72f * config.containerAlphaScale else 1f
+        )
+    } else {
+        MaterialTheme.colorScheme.surfaceBright.copy(
+            alpha = if (isBlurEnabled) 0.65f * config.containerAlphaScale else 1f
+        )
+    }
     val animationScope = rememberCoroutineScope()
     val interactiveHighlight =
         if (isBlurEnabled) {
@@ -687,11 +705,13 @@ fun FloatingNavSearchButton(
                     }
                 },
                 highlight = {
-                    Highlight.Default.copy(alpha = if (isBlurEnabled) 1f else 0f)
+                    Highlight.Default.copy(
+                        alpha = if (isBlurEnabled) (if (isDark) 0.45f else 1f) else 0f
+                    )
                 },
                 shadow = {
                     Shadow.Default.copy(
-                        color = Color.Black.copy(0.1f)
+                        color = Color.Black.copy(if (isDark) 0.35f else 0.1f)
                     )
                 },
                 layerBlock = {
@@ -718,7 +738,7 @@ fun FloatingNavSearchButton(
         Icon(
             imageVector = Icons.Rounded.Search,
             contentDescription = "搜索",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            tint = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.size(26.dp),
         )
     }

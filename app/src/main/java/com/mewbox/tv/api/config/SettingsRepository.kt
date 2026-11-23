@@ -8,6 +8,8 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.mewbox.tv.api.net.HostMapping
+import com.mewbox.tv.bean.ThemeColor
+import com.mewbox.tv.bean.ThemeMode
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -35,6 +37,8 @@ class SettingsRepository internal constructor(
     private val configIdKey = stringPreferencesKey("config_id")
     private val searchHistoryKey = stringPreferencesKey("search_history")
     private val doubanUidKey = stringPreferencesKey("douban_uid")
+    private val themeModeKey = stringPreferencesKey("theme_mode")
+    private val themeColorKey = stringPreferencesKey("theme_color")
 
     /** 选集「精简」开关：全局记忆，详情页抽屉与全屏选集面板共用（对齐 MewPlayer）。 */
     private val compactEpisodeKey = booleanPreferencesKey("compact_episode_title")
@@ -57,6 +61,8 @@ class SettingsRepository internal constructor(
     val configUrlFlow: Flow<String> = store.data.map { it[configUrlKey].orEmpty() }
     val configIdFlow: Flow<String> = store.data.map { it[configIdKey].orEmpty() }
     val doubanUidFlow: Flow<String> = store.data.map { it[doubanUidKey].orEmpty() }
+    val themeModeFlow: Flow<ThemeMode> = store.data.map { ThemeMode.fromStorage(it[themeModeKey]) }
+    val themeColorArgbFlow: Flow<Int> = store.data.map { ThemeColor.fromStorage(it[themeColorKey]) }
     val compactEpisodeTitleFlow: Flow<Boolean> = store.data.map { it[compactEpisodeKey] ?: false }
     val searchHistoryFlow: Flow<List<String>> = store.data.map { prefs ->
         parseSearchHistory(prefs[searchHistoryKey].orEmpty())
@@ -65,6 +71,14 @@ class SettingsRepository internal constructor(
     /** 首次渲染前同步读取一次，避免抽屉打开瞬间按钮状态闪一下。 */
     @Volatile
     var compactEpisodeTitle: Boolean = false
+        private set
+
+    @Volatile
+    var currentThemeMode: ThemeMode = ThemeMode.Auto
+        private set
+
+    @Volatile
+    var currentThemeColorArgb: Int = ThemeColor.DEFAULT_ARGB
         private set
 
     private fun parseSearchHistory(raw: String): List<String> {
@@ -81,6 +95,8 @@ class SettingsRepository internal constructor(
         currentConfigUrl = prefs[configUrlKey].orEmpty()
         currentConfigId = prefs[configIdKey].orEmpty()
         compactEpisodeTitle = prefs[compactEpisodeKey] ?: false
+        currentThemeMode = ThemeMode.fromStorage(prefs[themeModeKey])
+        currentThemeColorArgb = ThemeColor.fromStorage(prefs[themeColorKey])
         searchHistory = parseSearchHistory(prefs[searchHistoryKey].orEmpty())
         // 容错处理：若残留废弃的 10.0.2.2 模拟器旧映射，自动清除，优先使用 App 本地内置 Node.js 服务
         if (saved == "10.0.2.2") {
@@ -128,6 +144,17 @@ class SettingsRepository internal constructor(
     suspend fun setDoubanUid(uid: String) {
         val v = uid.trim()
         store.edit { it[doubanUidKey] = v }
+    }
+
+    suspend fun setThemeMode(mode: ThemeMode) {
+        currentThemeMode = mode
+        store.edit { it[themeModeKey] = mode.storageValue }
+    }
+
+    suspend fun setThemeColorArgb(argb: Int) {
+        val normalized = ThemeColor.normalizeArgb(argb)
+        currentThemeColorArgb = normalized
+        store.edit { it[themeColorKey] = ThemeColor.toHexRgb(normalized) }
     }
 
     suspend fun addSearchHistory(keyword: String) {

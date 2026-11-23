@@ -528,7 +528,13 @@ fun VideoPlayerViewport(
         )
     }
 
-    if (showInfoDialog) {
+    // 媒体信息抽屉：与画质/选集/轨道抽屉同款右侧滑入动画
+    AnimatedVisibility(
+        visible = showInfoDialog,
+        enter = slideInHorizontally(initialOffsetX = { it }),
+        exit = slideOutHorizontally(targetOffsetX = { it }),
+        modifier = Modifier.fillMaxSize(),
+    ) {
         PlayerMediaInfoDialog(
             vodName = vod.vodName,
             currentEpisodeName = currentEpisodeName,

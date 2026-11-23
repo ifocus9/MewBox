@@ -13,10 +13,13 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -48,6 +51,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -58,6 +62,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import com.mewbox.tv.ui.theme.MewBoxTheme
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -202,7 +207,7 @@ fun HtmlSourceScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.White),
+            .background(MaterialTheme.colorScheme.background),
     ) {
         // 底层：沉浸式全屏 WebView 容器
         AndroidView(
@@ -221,17 +226,23 @@ fun HtmlSourceScreen(
             },
         )
 
+        val awaitingWebTarget = uiState.activeConfig?.let { cfg ->
+            cfg.isHtml && cfg.url.isNotBlank() && webState.loadedRootUrl != cfg.url.trim()
+        } == true
+        val showLoadingCard = (webState.isInitialPageLoading || awaitingWebTarget) && !webState.isFullscreenVideo
+
         // 网页首屏或手动刷新加载中的居中提示卡片
         AnimatedVisibility(
-            visible = webState.isInitialPageLoading && !webState.isFullscreenVideo,
-            enter = fadeIn(),
-            exit = fadeOut(),
+            visible = showLoadingCard,
+            enter = EnterTransition.None,
+            exit = fadeOut(tween(180)),
             modifier = Modifier.fillMaxSize(),
         ) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color(0xFFF7F8FA)),
+                    .background(MaterialTheme.colorScheme.background)
+                    .pointerInput(Unit) { detectTapGestures { } },
                 contentAlignment = Alignment.Center,
             ) {
                 HtmlLoadingCard(subtitle = uiState.displaySubscriptionName)
@@ -250,7 +261,7 @@ fun HtmlSourceScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(3.dp),
-                color = Color(0xFF0A7AFF),
+                color = MaterialTheme.colorScheme.primary,
                 trackColor = Color.Transparent,
             )
         }
@@ -343,9 +354,9 @@ private fun HtmlLoadingCard(subtitle: String, modifier: Modifier = Modifier) {
     Surface(
         modifier = modifier.widthIn(min = 220.dp, max = 300.dp),
         shape = RoundedCornerShape(24.dp),
-        color = Color.White,
+        color = MewBoxTheme.colors.floatingCardBg,
         shadowElevation = 6.dp,
-        border = BorderStroke(0.5.dp, Color(0x14000000)),
+        border = BorderStroke(0.5.dp, MewBoxTheme.colors.subtleBorder),
     ) {
         Column(
             modifier = Modifier.padding(horizontal = 26.dp, vertical = 24.dp),
@@ -361,7 +372,7 @@ private fun HtmlLoadingCard(subtitle: String, modifier: Modifier = Modifier) {
                 text = "正在加载网页…",
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Medium,
-                color = Color(0xFF1A1A1A),
+                color = MaterialTheme.colorScheme.onSurface,
                 textAlign = TextAlign.Center,
             )
             if (subtitle.isNotBlank()) {
@@ -369,7 +380,7 @@ private fun HtmlLoadingCard(subtitle: String, modifier: Modifier = Modifier) {
                 Text(
                     text = subtitle,
                     fontSize = 12.5.sp,
-                    color = Color(0xFF8A8F98),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.Center,

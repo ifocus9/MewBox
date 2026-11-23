@@ -8,22 +8,27 @@ import com.fongmi.nodejs.NodeClient
 import com.mewbox.tv.api.config.SettingsRepository
 import com.mewbox.tv.api.config.SubscriptionCoordinator
 import com.mewbox.tv.api.config.VodConfig
-import com.mewbox.tv.api.tmdb.TmdbClient
 import com.mewbox.tv.api.tmdb.TmdbRepository
 import com.mewbox.tv.bean.Config
 import com.mewbox.tv.bean.Site
+import com.mewbox.tv.bean.ThemeColor
+import com.mewbox.tv.bean.ThemeMode
 import com.mewbox.tv.bean.TmdbConfig
 import com.mewbox.tv.catvod.SpiderRouter
 import com.mewbox.tv.db.ConfigDao
 import com.mewbox.tv.db.SiteDao
 import com.mewbox.tv.engine.nodejs.NodeRuntime
+import com.mewbox.tv.ui.theme.applyApplicationNightMode
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -42,11 +47,11 @@ data class SettingsUiState(
     val cacheSize: String = "0.0 MB",
     val tmdbConfig: TmdbConfig = TmdbConfig(),
     val doubanUid: String = "",
+    val themeMode: ThemeMode = ThemeMode.Auto,
+    val themeColorArgb: Int = ThemeColor.DEFAULT_ARGB,
     val importing: Boolean = false,
     /** 是否展示导入遮罩：Node.js 源交给全局 loading，避免两层提示叠加 */
     val showImportOverlay: Boolean = false,
-    /** 导入成功（含 Node.js 启动完成）后跳回首页的待消费标记 */
-    val pendingHomeNav: Boolean = false,
     val message: String? = null,
 )
 
@@ -60,18 +65,19 @@ class SettingsViewModel @Inject constructor(
     private val settings: SettingsRepository,
     private val router: SpiderRouter,
     private val tmdbRepository: TmdbRepository,
-    private val tmdbClient: TmdbClient,
 ) : ViewModel() {
 
     private data class Transient(
         val importing: Boolean = false,
         val showOverlay: Boolean = false,
-        val pendingHomeNav: Boolean = false,
         val message: String? = null,
     )
 
     private val transient = MutableStateFlow(Transient())
     private val cacheSizeFlow = MutableStateFlow("0.0 MB")
+
+    private val _navigateHomeEvents = MutableSharedFlow<Unit>(replay = 0, extraBufferCapacity = 1)
+    val navigateHomeEvents: SharedFlow<Unit> = _navigateHomeEvents.asSharedFlow()
 
     init {
         loadCacheSize()
@@ -90,10 +96,10 @@ class SettingsViewModel @Inject constructor(
     val uiState: StateFlow<SettingsUiState> = combine(
         combine(siteDao.observeAll(), settings.hostMappingFlow) { sites, host -> sites to host },
         combine(configDao.observeAll(), tmdbRepository.tmdbConfigFlow, settings.doubanUidFlow) { configs, tmdb, uid -> Triple(configs, tmdb, uid) },
-        settings.configUrlFlow,
+        combine(settings.configUrlFlow, settings.themeModeFlow, settings.themeColorArgbFlow) { url, themeMode, themeColorArgb -> Triple(url, themeMode, themeColorArgb) },
         cacheSizeFlow,
         transient,
-    ) { (sites, host), (configs, tmdb, uid), url, cache, t ->
+    ) { (sites, host), (configs, tmdb, uid), (url, themeMode, themeColorArgb), cache, t ->
         SettingsUiState(
             sites = sites.filter { !it.hide }.map { SiteItem(it, router.isSupported(it)) },
             configs = configs,
@@ -102,12 +108,20 @@ class SettingsViewModel @Inject constructor(
             cacheSize = cache,
             tmdbConfig = tmdb,
             doubanUid = uid,
+            themeMode = themeMode,
+            themeColorArgb = themeColorArgb,
             importing = t.importing,
             showImportOverlay = t.importing && t.showOverlay,
-            pendingHomeNav = t.pendingHomeNav,
             message = t.message,
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUiState())
+    }.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        SettingsUiState(
+            themeMode = settings.currentThemeMode,
+            themeColorArgb = settings.currentThemeColorArgb,
+        ),
+    )
 
     fun loadCacheSize() {
         viewModelScope.launch(Dispatchers.IO) {
@@ -136,21 +150,24 @@ class SettingsViewModel @Inject constructor(
         val nodeSource = coordinator.isNodeSource(input)
         viewModelScope.launch {
             transient.value = Transient(importing = true, showOverlay = !nodeSource)
-            transient.value = try {
-                val result = coordinator.switchConfig(input, name, configId, replaceUrl)
-                when (result) {
-                    is SubscriptionCoordinator.ActionResult.Imported -> Transient(
-                        message = result.message,
-                        pendingHomeNav = true,
-                    )
-                    is SubscriptionCoordinator.ActionResult.Renamed -> Transient(message = result.message)
-                    SubscriptionCoordinator.ActionResult.NoOp -> Transient()
+            try {
+                when (val result = coordinator.switchConfig(input, name, configId, replaceUrl)) {
+                    is SubscriptionCoordinator.ActionResult.Imported -> {
+                        vodConfig.notifySubscriptionMessage(result.message)
+                        _navigateHomeEvents.tryEmit(Unit)
+                    }
+                    is SubscriptionCoordinator.ActionResult.Renamed -> {
+                        vodConfig.notifySubscriptionMessage(result.message)
+                    }
+                    SubscriptionCoordinator.ActionResult.NoOp -> Unit
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 val msg = if (NodeClient.isInterrupted(e)) "已取消导入" else "导入失败：${NodeRuntime.describe(e)}"
-                Transient(message = msg)
+                vodConfig.notifySubscriptionMessage(msg)
+            } finally {
+                transient.value = Transient()
             }
         }
     }
@@ -169,20 +186,24 @@ class SettingsViewModel @Inject constructor(
 
         viewModelScope.launch {
             transient.value = Transient(importing = true, showOverlay = showOverlay)
-            transient.value = try {
+            try {
                 when (val result = coordinator.saveConfig(url, name, pickedUri, isEdit, oldUrl)) {
-                    is SubscriptionCoordinator.ActionResult.Imported -> Transient(
-                        message = result.message,
-                        pendingHomeNav = true,
-                    )
-                    is SubscriptionCoordinator.ActionResult.Renamed -> Transient(message = result.message)
-                    SubscriptionCoordinator.ActionResult.NoOp -> Transient()
+                    is SubscriptionCoordinator.ActionResult.Imported -> {
+                        vodConfig.notifySubscriptionMessage(result.message)
+                        _navigateHomeEvents.tryEmit(Unit)
+                    }
+                    is SubscriptionCoordinator.ActionResult.Renamed -> {
+                        vodConfig.notifySubscriptionMessage(result.message)
+                    }
+                    SubscriptionCoordinator.ActionResult.NoOp -> Unit
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 val msg = if (NodeClient.isInterrupted(e)) "已取消导入" else "导入失败：${NodeRuntime.describe(e)}"
-                Transient(message = msg)
+                vodConfig.notifySubscriptionMessage(msg)
+            } finally {
+                transient.value = Transient()
             }
         }
     }
@@ -190,7 +211,7 @@ class SettingsViewModel @Inject constructor(
     fun deleteConfig(url: String) {
         viewModelScope.launch {
             coordinator.deleteConfig(url)?.let { err ->
-                transient.update { it.copy(message = err) }
+                vodConfig.notifySubscriptionMessage(err)
             }
         }
     }
@@ -210,11 +231,6 @@ class SettingsViewModel @Inject constructor(
 
     fun setHome(site: Site) = viewModelScope.launch { vodConfig.setHome(site.key) }
 
-    fun saveTmdbConfig(config: TmdbConfig) = viewModelScope.launch {
-        tmdbRepository.save(config)
-        transient.update { it.copy(message = "TMDB 设置已保存") }
-    }
-
     fun saveDoubanUid(input: String) {
         val uid = SettingsRepository.normalizeDoubanUid(input)
             ?: run {
@@ -229,15 +245,20 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    suspend fun testTmdbApi(apiKey: String, apiBase: String): Result<String> =
-        tmdbClient.testConnectivity(apiKey, apiBase)
+    fun setThemeMode(mode: ThemeMode) {
+        viewModelScope.launch {
+            applyApplicationNightMode(context, mode)
+            settings.setThemeMode(mode)
+        }
+    }
 
-    suspend fun testTmdbImage(imageBase: String): Result<String> =
-        tmdbClient.testImageCdn(imageBase)
+    fun setThemeColor(argb: Int) {
+        viewModelScope.launch {
+            settings.setThemeColorArgb(argb)
+        }
+    }
 
     fun consumeMessage() = transient.update { it.copy(message = null) }
-
-    fun consumePendingHomeNav() = transient.update { it.copy(pendingHomeNav = false) }
 }
 
 private fun calculateCacheSize(context: Context): Long {

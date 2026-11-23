@@ -32,7 +32,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -41,7 +40,6 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mewbox.tv.BuildConfig
-import com.mewbox.tv.ui.components.LoadingState
 import com.mewbox.tv.ui.components.SubscriptionHistoryDialog
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -50,9 +48,9 @@ fun SettingsScreen(
     modifier: Modifier = Modifier,
     /** 切换/新增订阅后立刻跳回首页：Node.js 加载 loading 由全局浮层展示在首页上 */
     onSwitchToHome: () -> Unit = {},
+    onNavigateToTmdb: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
-    val context = LocalContext.current
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var showConfigDialog by rememberSaveable { mutableStateOf(false) }
     var configDialogIsEdit by rememberSaveable { mutableStateOf(false) }
@@ -60,8 +58,8 @@ fun SettingsScreen(
     var configDialogInitialName by rememberSaveable { mutableStateOf("") }
     var showHistoryDialog by rememberSaveable { mutableStateOf(false) }
     var showAboutDialog by rememberSaveable { mutableStateOf(false) }
-    var showTmdbDialog by rememberSaveable { mutableStateOf(false) }
     var showDoubanDialog by rememberSaveable { mutableStateOf(false) }
+    var showThemeColorPicker by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         viewModel.loadCacheSize()
@@ -112,113 +110,81 @@ fun SettingsScreen(
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
                 .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 150.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            // 卡片 1：订阅配置（点击新增弹窗，长按编辑弹窗并可设置名称；右侧历史图标为灰色）
-            SettingCard {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(56.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    // 主点击区域：点击新增，长按编辑
-                    Row(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                            .combinedClickable(
-                                onClick = {
-                                    configDialogIsEdit = false
-                                    configDialogInitialUrl = ""
-                                    configDialogInitialName = ""
-                                    showConfigDialog = true
-                                },
-                                onLongClick = {
-                                    configDialogIsEdit = true
-                                    configDialogInitialUrl = state.savedConfigUrl
-                                    configDialogInitialName = currentConfig?.name.orEmpty()
-                                    showConfigDialog = true
-                                },
-                            )
-                            .padding(start = 16.dp, end = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = "订阅",
-                            fontSize = 16.sp,
-                            color = TextPrimary,
-                            fontWeight = FontWeight.Normal,
-                        )
-                        Spacer(Modifier.weight(1f))
-                        Text(
-                            text = subscriptionDisplay,
-                            fontSize = 14.sp,
-                            color = TextSecondary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            textAlign = TextAlign.End,
-                            modifier = Modifier.widthIn(max = 180.dp),
-                        )
-                    }
-
-                    // 历史订阅列表按钮
-                    IconButton(
+            // 分组：数据服务
+            Column {
+                SettingSectionLabel("数据服务")
+                SettingCard {
+                    SubscriptionRow(
+                        display = subscriptionDisplay,
                         onClick = {
+                            configDialogIsEdit = false
+                            configDialogInitialUrl = ""
+                            configDialogInitialName = ""
+                            showConfigDialog = true
+                        },
+                        onLongClick = {
+                            configDialogIsEdit = true
+                            configDialogInitialUrl = state.savedConfigUrl
+                            configDialogInitialName = currentConfig?.name.orEmpty()
+                            showConfigDialog = true
+                        },
+                        onHistoryClick = {
                             if (state.configs.any { it.url != state.savedConfigUrl }) {
                                 showHistoryDialog = true
                             } else {
                                 AppToast.show("没有可切换的订阅")
                             }
                         },
-                        modifier = Modifier
-                            .padding(end = 8.dp)
-                            .size(40.dp),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.History,
-                            contentDescription = "订阅列表",
-                            modifier = Modifier.size(22.dp),
-                            tint = TextSecondary,
-                        )
-                    }
+                    )
+                    SettingDivider()
+                    SettingRow(
+                        title = "TMDB 设置",
+                        value = if (state.tmdbConfig.enable) "已开启" else "已关闭",
+                        onClick = onNavigateToTmdb,
+                    )
+                    SettingDivider()
+                    SettingRow(
+                        title = "豆瓣想看",
+                        value = state.doubanUid.ifBlank { "未设置" },
+                        onClick = { showDoubanDialog = true },
+                    )
                 }
             }
 
-            // 卡片 2：TMDB 设置
-            SettingCard {
-                SettingRow(
-                    title = "TMDB 设置",
-                    value = if (state.tmdbConfig.enable) "开启" else "关闭",
-                    onClick = { showTmdbDialog = true },
-                )
+            // 分组：外观
+            Column {
+                SettingSectionLabel("外观")
+                SettingCard {
+                    ThemeModeRow(
+                        selectedMode = state.themeMode,
+                        onSelect = viewModel::setThemeMode,
+                    )
+                    SettingDivider()
+                    ThemeColorRow(
+                        selectedArgb = state.themeColorArgb,
+                        onClick = { showThemeColorPicker = true },
+                    )
+                }
             }
 
-            // 卡片 3：豆瓣想看（追剧页「豆瓣想看」分段的账号来源）
-            SettingCard {
-                SettingRow(
-                    title = "豆瓣想看",
-                    value = state.doubanUid.ifBlank { "未设置" },
-                    onClick = { showDoubanDialog = true },
-                )
-            }
-
-            // 卡片 3：缓存清理
-            SettingCard {
-                SettingRow(
-                    title = "缓存",
-                    value = state.cacheSize,
-                    onClick = { viewModel.clearCache() },
-                )
-            }
-
-            // 卡片 4：关于
-            SettingCard {
-                SettingRow(
-                    title = "关于",
-                    value = "MewBox ${BuildConfig.VERSION_NAME}",
-                    onClick = { showAboutDialog = true },
-                )
+            // 分组：通用
+            Column {
+                SettingSectionLabel("通用")
+                SettingCard {
+                    SettingRow(
+                        title = "缓存",
+                        value = state.cacheSize,
+                        onClick = { viewModel.clearCache() },
+                    )
+                    SettingDivider()
+                    SettingRow(
+                        title = "关于",
+                        value = "MewBox ${BuildConfig.VERSION_NAME}",
+                        onClick = { showAboutDialog = true },
+                    )
+                }
             }
         }
     }
@@ -268,20 +234,6 @@ fun SettingsScreen(
         )
     }
 
-    // TMDB 设置弹窗
-    if (showTmdbDialog) {
-        TmdbDialog(
-            initialConfig = state.tmdbConfig,
-            onTestApi = { key, base -> viewModel.testTmdbApi(key, base) },
-            onTestImage = { base -> viewModel.testTmdbImage(base) },
-            onSave = { config ->
-                viewModel.saveTmdbConfig(config)
-                showTmdbDialog = false
-            },
-            onDismiss = { showTmdbDialog = false },
-        )
-    }
-
     // 豆瓣想看 uid 弹窗
     if (showDoubanDialog) {
         DoubanDialog(
@@ -301,11 +253,74 @@ fun SettingsScreen(
         )
     }
 
+    // 自定义主题色选择器
+    if (showThemeColorPicker) {
+        ThemeColorPickerSheet(
+            initialArgb = state.themeColorArgb,
+            onConfirm = viewModel::setThemeColor,
+            onDismiss = { showThemeColorPicker = false },
+        )
+    }
+
     // 导入成功自动跳回首页
-    LaunchedEffect(state.pendingHomeNav) {
-        if (state.pendingHomeNav) {
+    LaunchedEffect(viewModel) {
+        viewModel.navigateHomeEvents.collect {
             onSwitchToHome()
-            viewModel.consumePendingHomeNav()
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun SubscriptionRow(
+    display: String,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    onHistoryClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(56.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                .padding(start = 16.dp, end = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "订阅",
+                fontSize = 16.sp,
+                color = TextPrimary,
+                fontWeight = FontWeight.Normal,
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = display,
+                fontSize = 14.sp,
+                color = TextSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.End,
+                modifier = Modifier.widthIn(max = 180.dp),
+            )
+        }
+        IconButton(
+            onClick = onHistoryClick,
+            modifier = Modifier
+                .padding(end = 8.dp)
+                .size(40.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Default.History,
+                contentDescription = "订阅列表",
+                modifier = Modifier.size(22.dp),
+                tint = TextSecondary,
+            )
         }
     }
 }

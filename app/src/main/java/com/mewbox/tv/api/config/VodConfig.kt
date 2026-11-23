@@ -17,6 +17,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,6 +29,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -36,6 +38,7 @@ import timber.log.Timber
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.InputStream
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -67,6 +70,17 @@ class VodConfig @Inject constructor(
 
     private val _importingText = MutableStateFlow<String?>(null)
     val importingText: StateFlow<String?> = _importingText.asStateFlow()
+
+    /** 跨根页面（Home / Settings / HTML 网页源）统一订阅切换结果提示通道，避免切换卸载后 Toast 残留错乱 */
+    private val _subscriptionMessages = Channel<String>(Channel.BUFFERED)
+    val subscriptionMessages: Flow<String> = _subscriptionMessages.receiveAsFlow()
+
+    fun notifySubscriptionMessage(message: String) {
+        val text = message.trim()
+        if (text.isNotEmpty()) _subscriptionMessages.trySend(text)
+    }
+
+    private val bootConfigured = AtomicBoolean(false)
 
     private val configStateLock = Any()
     private var activeConfigOps = 0
@@ -232,8 +246,6 @@ class VodConfig @Inject constructor(
                     loadResult.configJson
                 }
                 isLocal -> {
-                    router.clear()
-                    nodeRuntime.clear()
                     if (isHtmlFile(text)) contentType = "text/html"
                     withContext(Dispatchers.IO) { readLocalContent(text) }
                 }
@@ -292,7 +304,6 @@ class VodConfig @Inject constructor(
     }
 
     private suspend fun commitHtmlConfig(url: String, resolvedId: String, finalName: String, replaceUrl: String) {
-        settings.setActiveConfig(url, resolvedId)
         configDao.insert(
             Config(
                 url = url,
@@ -303,9 +314,11 @@ class VodConfig @Inject constructor(
                 id = resolvedId,
             ),
         )
+        settings.setActiveConfig(url, resolvedId)
         if (replaceUrl.isNotBlank() && replaceUrl != url) {
             configDao.delete(replaceUrl)
         }
+        bootConfigured.set(true)
         backgroundScope.launch { ensurePushBackendReady() }
         _configReloadFlow.tryEmit(System.currentTimeMillis())
     }
@@ -329,7 +342,6 @@ class VodConfig @Inject constructor(
 
         siteDao.replaceAll(finalSites)
         if (persistConfigRecord) {
-            settings.setActiveConfig(sourceUrl, resolvedId)
             configDao.insert(
                 Config(
                     url = sourceUrl,
@@ -340,10 +352,12 @@ class VodConfig @Inject constructor(
                     id = resolvedId,
                 ),
             )
+            settings.setActiveConfig(sourceUrl, resolvedId)
             if (replaceUrl.isNotBlank() && replaceUrl != sourceUrl) {
                 configDao.delete(replaceUrl)
             }
         }
+        bootConfigured.set(true)
         awaitSitesSettled(finalSites)
         _configReloadFlow.tryEmit(System.currentTimeMillis())
     }
@@ -362,6 +376,7 @@ class VodConfig @Inject constructor(
      * 冷启动确认当前激活订阅就绪，并在收尾后异步清理孤儿缓存包与无主本地归档。
      */
     suspend fun ensureActiveConfig(): String? {
+        if (!bootConfigured.compareAndSet(false, true)) return null
         var runHtmlPushSetup = false
         try {
             return withConfiguring {

@@ -64,6 +64,29 @@ class DetailPlaybackTracker @Inject constructor(
     }
 
     /**
+     * 当原片海报缺失或加载失败并从 TMDB 补充高清海报后，同步更新当前播放会话与已存在的历史记录
+     */
+    fun updateVodPic(siteKey: String, vodId: String, vodPic: String) {
+        if (vodPic.isBlank()) return
+        activeSession?.let { session ->
+            if (session.site.key == siteKey && session.vod.vodId == vodId && session.vod.vodPic != vodPic) {
+                activeSession = session.copy(vod = session.vod.copy(vodPic = vodPic))
+            }
+        }
+        ioScope.launch {
+            try {
+                val existing = repository.getHistory(siteKey, vodId)
+                if (existing != null && existing.vodPic != vodPic) {
+                    repository.saveHistory(existing.copy(vodPic = vodPic))
+                    Timber.i("补充更新播放历史海报: $siteKey/$vodId -> $vodPic")
+                }
+            } catch (e: Exception) {
+                Timber.w(e, "补充更新播放历史海报失败: $siteKey/$vodId")
+            }
+        }
+    }
+
+    /**
      * 监听播放器状态：仅当播放器成功缓冲并开始播放（READY && isPlaying）后，才计入播放历史记录
      */
     fun observePlayerState(

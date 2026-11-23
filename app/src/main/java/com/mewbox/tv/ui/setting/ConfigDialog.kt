@@ -2,16 +2,28 @@ package com.mewbox.tv.ui.setting
 
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.FolderOpen
@@ -19,33 +31,39 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.mewbox.tv.ui.components.MewDialogShell
-import com.mewbox.tv.ui.components.MewDialogSpec
+import com.mewbox.tv.ui.components.LocalMewOverlayDismiss
+import com.mewbox.tv.ui.components.MewOverlayVariant
+import com.mewbox.tv.ui.components.MewSheetShell
 import com.mewbox.tv.ui.components.OverlayTokens
 
-private val BluePrimary = OverlayTokens.Accent
-private val DialogOutlinedBg = OverlayTokens.ItemBg
-private val DialogOutlinedText = OverlayTokens.OutlinedText
-
 /**
- * 添加 / 编辑订阅弹窗。
+ * 添加 / 编辑订阅底部抽屉。
  * 支持输入网络订阅地址 / JSON 文本，或通过系统 SAF 直接选择本地文件（ZIP / JSON / HTML）。
- * 注意：弹窗只负责收集输入，点「确定」后立即关闭；导入进度与结果由外部 loading / Toast 承担。
+ * 注意：抽屉只负责收集输入，点「确定」后立即关闭；导入进度与结果由外部 loading / Toast 承担。
  */
 @Composable
 fun ConfigDialog(
@@ -56,6 +74,8 @@ fun ConfigDialog(
     onConfirm: (url: String, name: String, pickedUri: Uri?) -> Unit,
 ) {
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
     val isManagedLocalInitial = FilePickerHelper.isInternalLocalConfigUrl(context, initialUrl)
 
     var name by rememberSaveable(initialName) { mutableStateOf(initialName) }
@@ -89,43 +109,59 @@ fun ConfigDialog(
     }
     val canConfirm = pickedUriString != null || keepingExistingLocal || urlText.isNotBlank()
 
-    MewDialogShell(
+    MewSheetShell(
         onDismiss = onDismiss,
-        spec = MewDialogSpec.Compact,
-    ) {
+        variant = MewOverlayVariant.Light,
+    ) { focusModifier ->
+        val dismiss = LocalMewOverlayDismiss.current ?: onDismiss
         Column(
-            modifier = Modifier.padding(OverlayTokens.Padding),
+            modifier = focusModifier
+                .fillMaxWidth()
+                .padding(horizontal = OverlayTokens.Padding)
+                .navigationBarsPadding()
+                .imePadding()
+                .verticalScroll(rememberScrollState()),
         ) {
             Text(
                 text = if (isEdit) "编辑订阅" else "添加订阅",
-                fontSize = 20.sp,
+                fontSize = 17.sp,
                 fontWeight = FontWeight.Bold,
-                color = Color(0xFF202124),
+                color = OverlayTokens.DialogTitle,
             )
 
             Spacer(Modifier.height(14.dp))
 
             if (isEdit) {
-                OutlinedTextField(
+                ConfigInputSlot(
+                    label = "订阅名称",
                     value = name,
                     onValueChange = { name = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("订阅名称", color = Color(0xFF8A8F98), fontSize = 13.sp) },
-                    singleLine = true,
-                    shape = RoundedCornerShape(10.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = BluePrimary,
-                        unfocusedBorderColor = Color(0xFFDADCE0),
-                        focusedContainerColor = Color.White,
-                        unfocusedContainerColor = Color.White,
-                        cursorColor = BluePrimary,
+                    placeholder = "输入自定义名称（选填）",
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                    keyboardActions = KeyboardActions(
+                        onNext = { focusManager.moveFocus(FocusDirection.Down) },
                     ),
+                    trailingContent = {
+                        if (name.isNotEmpty()) {
+                            IconButton(
+                                onClick = { name = "" },
+                                modifier = Modifier.size(32.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Clear,
+                                    contentDescription = "清除名称",
+                                    tint = OverlayTokens.TextSecondary,
+                                    modifier = Modifier.size(17.dp),
+                                )
+                            }
+                        }
+                    },
                 )
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(12.dp))
             }
 
-            // 地址输入框独占整行：清除 / 本地文件收成紧凑尾图标，避免长链接被右侧方块挤成多行
-            OutlinedTextField(
+            ConfigInputSlot(
+                label = if (isEdit) "订阅地址" else null,
                 value = addressDisplay,
                 onValueChange = { value ->
                     if (!isLocalMode) {
@@ -133,15 +169,19 @@ fun ConfigDialog(
                     }
                 },
                 readOnly = isLocalMode,
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("请输入配置地址或选择本地包", color = Color(0xFF8A8F98), fontSize = 14.sp) },
-                singleLine = true,
-                shape = RoundedCornerShape(10.dp),
-                trailingIcon = {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(end = 4.dp),
-                    ) {
+                placeholder = "请输入配置地址或选择本地包",
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Uri,
+                    imeAction = ImeAction.Done,
+                ),
+                keyboardActions = KeyboardActions(
+                    onDone = {
+                        keyboard?.hide()
+                        focusManager.clearFocus()
+                    },
+                ),
+                trailingContent = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         if (isLocalMode || urlText.isNotEmpty()) {
                             IconButton(
                                 onClick = {
@@ -150,59 +190,54 @@ fun ConfigDialog(
                                     keepingExistingLocal = false
                                     urlText = ""
                                 },
-                                modifier = Modifier.size(30.dp),
+                                modifier = Modifier.size(32.dp),
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Clear,
                                     contentDescription = "清除地址",
-                                    tint = Color(0xFF8E8E93),
-                                    modifier = Modifier.size(18.dp),
+                                    tint = OverlayTokens.TextSecondary,
+                                    modifier = Modifier.size(17.dp),
                                 )
                             }
                         }
                         IconButton(
                             onClick = { openDocLauncher.launch(arrayOf("*/*")) },
-                            modifier = Modifier.size(32.dp),
+                            modifier = Modifier.size(34.dp),
                         ) {
                             Icon(
                                 imageVector = Icons.Default.FolderOpen,
                                 contentDescription = "选择本地文件",
-                                tint = Color(0xFF8E8E93),
-                                modifier = Modifier.size(22.dp),
+                                tint = OverlayTokens.TextSecondary,
+                                modifier = Modifier.size(20.dp),
                             )
                         }
                     }
                 },
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = BluePrimary,
-                    unfocusedBorderColor = Color(0xFFDADCE0),
-                    focusedContainerColor = Color.White,
-                    unfocusedContainerColor = Color.White,
-                    cursorColor = BluePrimary,
-                ),
             )
 
             Spacer(Modifier.height(18.dp))
 
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Button(
-                    onClick = onDismiss,
-                    modifier = Modifier.height(40.dp),
-                    shape = RoundedCornerShape(10.dp),
+                    onClick = dismiss,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(44.dp),
+                    shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = DialogOutlinedBg,
-                        contentColor = DialogOutlinedText,
+                        containerColor = OverlayTokens.SheetItemBg,
+                        contentColor = OverlayTokens.OutlinedText,
                     ),
                     elevation = ButtonDefaults.buttonElevation(0.dp, 0.dp),
                 ) {
-                    Text("取消", fontSize = 15.sp)
+                    Text("取消", fontSize = 15.sp, fontWeight = FontWeight.Medium)
                 }
-
-                Spacer(Modifier.width(10.dp))
 
                 Button(
                     onClick = {
@@ -220,19 +255,97 @@ fun ConfigDialog(
                         onConfirm(confirmUrl, confirmName, pickedUri)
                     },
                     enabled = canConfirm,
-                    modifier = Modifier.height(40.dp),
-                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(44.dp),
+                    shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = BluePrimary,
-                        contentColor = Color.White,
-                        disabledContainerColor = BluePrimary.copy(alpha = 0.4f),
-                        disabledContentColor = Color.White.copy(alpha = 0.7f),
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                        disabledContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f),
+                        disabledContentColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f),
                     ),
                     elevation = ButtonDefaults.buttonElevation(0.dp, 0.dp),
                 ) {
-                    Text("确定", fontSize = 15.sp)
+                    Text("确定", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ConfigInputSlot(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    label: String? = null,
+    readOnly: Boolean = false,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    keyboardActions: KeyboardActions = KeyboardActions.Default,
+    trailingContent: @Composable () -> Unit = {},
+) {
+    var isFocused by remember { mutableStateOf(false) }
+    val primaryColor = MaterialTheme.colorScheme.primary
+    val borderColor by animateColorAsState(
+        targetValue = if (isFocused && !readOnly) primaryColor.copy(alpha = 0.55f) else Color.Transparent,
+        animationSpec = tween(durationMillis = 160),
+        label = "configInputBorder",
+    )
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        if (!label.isNullOrBlank()) {
+            Text(
+                text = label,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                color = OverlayTokens.TextPrimary,
+            )
+            Spacer(Modifier.height(7.dp))
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 46.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(OverlayTokens.SheetItemBg)
+                .border(1.dp, borderColor, RoundedCornerShape(12.dp))
+                .padding(start = 14.dp, end = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(vertical = 12.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                if (value.isEmpty()) {
+                    Text(
+                        text = placeholder,
+                        color = OverlayTokens.TextSecondary,
+                        fontSize = 14.sp,
+                        maxLines = 1,
+                    )
+                }
+                BasicTextField(
+                    value = value,
+                    onValueChange = onValueChange,
+                    readOnly = readOnly,
+                    singleLine = true,
+                    textStyle = TextStyle(
+                        color = OverlayTokens.TextPrimary,
+                        fontSize = 14.sp,
+                    ),
+                    cursorBrush = SolidColor(primaryColor),
+                    keyboardOptions = keyboardOptions,
+                    keyboardActions = keyboardActions,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onFocusChanged { isFocused = it.isFocused },
+                )
+            }
+            trailingContent()
         }
     }
 }

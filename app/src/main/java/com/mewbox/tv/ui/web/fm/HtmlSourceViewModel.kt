@@ -16,6 +16,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -80,11 +82,14 @@ class HtmlSourceViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
-            vodConfig.observeActiveConfig().collect { config ->
-                if (config != null && config.isHtml && config.url.isNotBlank()) {
-                    webController.loadSubscriptionUrl(config.url)
+            vodConfig.observeActiveConfig()
+                .map { config -> config?.takeIf { it.isHtml && it.url.isNotBlank() }?.url?.trim().orEmpty() }
+                .distinctUntilChanged()
+                .collect { url ->
+                    if (url.isNotBlank()) {
+                        webController.loadSubscriptionUrl(url)
+                    }
                 }
-            }
         }
 
         viewModelScope.launch(Dispatchers.IO) {
@@ -121,19 +126,20 @@ class HtmlSourceViewModel @Inject constructor(
             try {
                 when (val result = coordinator.switchConfig(targetUrl)) {
                     is SubscriptionCoordinator.ActionResult.Imported -> {
-                        val msg = if (result.isHtml) "已切换至网页订阅源" else result.message.replace("导入成功：", "订阅切换成功（共 ").let { if (it != result.message) "$it）" else result.message }
-                        transient.value = TransientState(message = msg)
+                        vodConfig.notifySubscriptionMessage(result.message)
                     }
                     is SubscriptionCoordinator.ActionResult.Renamed -> {
-                        transient.value = TransientState(message = result.message)
+                        vodConfig.notifySubscriptionMessage(result.message)
                     }
-                    SubscriptionCoordinator.ActionResult.NoOp -> transient.value = TransientState()
+                    SubscriptionCoordinator.ActionResult.NoOp -> Unit
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 val msg = if (NodeClient.isInterrupted(e)) "已取消切换" else "订阅切换失败：${NodeRuntime.describe(e)}"
-                transient.value = TransientState(message = msg)
+                vodConfig.notifySubscriptionMessage(msg)
+            } finally {
+                transient.value = TransientState()
             }
         }
     }
@@ -149,16 +155,17 @@ class HtmlSourceViewModel @Inject constructor(
         if (pickedUri == null && url.trim().isEmpty()) return
         val isNode = coordinator.isNodeSource(url, pickedUri)
         val showOverlay = pickedUri == null && !isNode && !(isEdit && oldUrl.trim() == url.trim())
+        val previousActiveUrl = uiState.value.activeConfig?.url?.trim().orEmpty()
 
         viewModelScope.launch {
             transient.value = TransientState(isSwitching = true, showOverlay = showOverlay)
             try {
                 when (val result = coordinator.saveConfig(url, name, pickedUri, isEdit, oldUrl)) {
                     is SubscriptionCoordinator.ActionResult.Imported -> {
-                        if (result.isHtml && result.loadedUrl.isNotBlank()) {
+                        if (result.isHtml && result.loadedUrl.isNotBlank() && result.loadedUrl.trim() == previousActiveUrl) {
                             webController.loadSubscriptionUrl(result.loadedUrl, forceReload = true)
                         }
-                        transient.value = TransientState(message = result.message)
+                        vodConfig.notifySubscriptionMessage(result.message)
                     }
                     is SubscriptionCoordinator.ActionResult.Renamed -> {
                         val msg = if (result.message == "已清除名称，将使用订阅链接") {
@@ -166,15 +173,17 @@ class HtmlSourceViewModel @Inject constructor(
                         } else {
                             result.message
                         }
-                        transient.value = TransientState(message = msg)
+                        vodConfig.notifySubscriptionMessage(msg)
                     }
-                    SubscriptionCoordinator.ActionResult.NoOp -> transient.value = TransientState()
+                    SubscriptionCoordinator.ActionResult.NoOp -> Unit
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 val msg = if (NodeClient.isInterrupted(e)) "已取消导入" else "导入失败：${NodeRuntime.describe(e)}"
-                transient.value = TransientState(message = msg)
+                vodConfig.notifySubscriptionMessage(msg)
+            } finally {
+                transient.value = TransientState()
             }
         }
     }
@@ -182,7 +191,7 @@ class HtmlSourceViewModel @Inject constructor(
     fun deleteConfig(url: String) {
         viewModelScope.launch {
             coordinator.deleteConfig(url)?.let { err ->
-                transient.update { it.copy(message = err) }
+                vodConfig.notifySubscriptionMessage(err)
             }
         }
     }

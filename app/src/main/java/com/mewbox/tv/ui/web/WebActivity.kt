@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
@@ -27,6 +28,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -55,6 +57,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -68,16 +71,25 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.mewbox.tv.api.config.SettingsRepository
 import com.mewbox.tv.bean.WebOptions
+import com.mewbox.tv.ui.theme.DARK_WINDOW_BG_ARGB
+import com.mewbox.tv.ui.theme.LIGHT_WINDOW_BG_ARGB
 import com.mewbox.tv.ui.theme.MewBoxTheme
 import com.mewbox.tv.util.AppToast
+import dagger.hilt.android.AndroidEntryPoint
 import timber.log.Timber
+import javax.inject.Inject
 
 /**
  * 内部 Webview 容器界面（严格对齐 FongMi WebActivity）
  * 支持打开外部/本地网页、保持 Cookie 鉴权、网盘扫码以及各类拓展 Webview 交互。
  */
+@AndroidEntryPoint
 class WebActivity : ComponentActivity() {
+
+    @Inject lateinit var settings: SettingsRepository
 
     companion object {
         const val EXTRA_OPTIONS = "extra_options"
@@ -148,17 +160,9 @@ class WebActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 遵循开发规范：强制软件不受系统深色模式控制
-        enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.light(
-                android.graphics.Color.TRANSPARENT,
-                android.graphics.Color.TRANSPARENT,
-            ),
-            navigationBarStyle = SystemBarStyle.light(
-                android.graphics.Color.TRANSPARENT,
-                android.graphics.Color.TRANSPARENT,
-            ),
-        )
+        val systemDark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
+        applySystemBars(settings.currentThemeMode.isDark(systemDark))
 
         val rawOpt = intent.getStringExtra(EXTRA_OPTIONS).orEmpty()
         webOptions = WebOptions.fromJsonString(rawOpt)
@@ -169,7 +173,17 @@ class WebActivity : ComponentActivity() {
         }
 
         setContent {
-            MewBoxTheme(darkTheme = false) {
+            val themeMode by settings.themeModeFlow.collectAsStateWithLifecycle(
+                initialValue = settings.currentThemeMode,
+            )
+            val themeColorArgb by settings.themeColorArgbFlow.collectAsStateWithLifecycle(
+                initialValue = settings.currentThemeColorArgb,
+            )
+            val darkTheme = themeMode.isDark(isSystemInDarkTheme())
+            LaunchedEffect(darkTheme) {
+                applySystemBars(darkTheme)
+            }
+            MewBoxTheme(darkTheme = darkTheme, accentArgb = themeColorArgb) {
                 WebScreen(
                     options = webOptions,
                     onClose = { finish() },
@@ -193,6 +207,20 @@ class WebActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    private fun applySystemBars(darkTheme: Boolean) {
+        val barStyle = if (darkTheme) {
+            SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+        } else {
+            SystemBarStyle.light(
+                android.graphics.Color.TRANSPARENT,
+                android.graphics.Color.TRANSPARENT,
+            )
+        }
+        enableEdgeToEdge(statusBarStyle = barStyle, navigationBarStyle = barStyle)
+        window.decorView.setBackgroundColor(if (darkTheme) DARK_WINDOW_BG_ARGB else LIGHT_WINDOW_BG_ARGB)
+        AppToast.setDarkTheme(darkTheme)
     }
 
     private fun isCookieComplete(options: WebOptions, currentUrl: String): Boolean {
@@ -387,7 +415,7 @@ private fun WebScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .background(Color.White),
+                    .background(MaterialTheme.colorScheme.background),
             ) {
                 AndroidView(
                     modifier = Modifier.fillMaxSize(),

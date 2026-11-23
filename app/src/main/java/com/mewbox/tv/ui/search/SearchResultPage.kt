@@ -50,6 +50,7 @@ import com.mewbox.tv.ui.components.VodCard
 import com.mewbox.tv.ui.components.VodGridSkeletonGroup
 import com.mewbox.tv.ui.components.VodListSkeletonGroup
 import com.mewbox.tv.ui.components.glassTopBarSurface
+import com.mewbox.tv.ui.theme.MewBoxTheme
 
 /**
  * 搜索结果聚合页（严格对齐 MewPlayer CollectFragment 视觉与交互）
@@ -84,6 +85,10 @@ fun SearchResultPage(
         }
     }
 
+    val barFallback = MewBoxTheme.colors.searchBarFallback
+    val onSurface = MaterialTheme.colorScheme.onSurface
+    val onSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
+
     Column(modifier = modifier.fillMaxSize()) {
         // 顶部 Toolbar（点击标题直接返回搜索输入框重新编辑）
         Row(
@@ -102,14 +107,14 @@ fun SearchResultPage(
                 Box(
                     modifier = Modifier
                         .size(40.dp)
-                        .glassTopBarSurface(CircleShape, Color(0xFFF4F5F7))
+                        .glassTopBarSurface(CircleShape, barFallback)
                         .clickable(onClick = onBackToInput),
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                         contentDescription = "返回搜索",
-                        tint = Color(0xFF1F2329),
+                        tint = onSurface,
                         modifier = Modifier.size(22.dp),
                     )
                 }
@@ -123,7 +128,7 @@ fun SearchResultPage(
                         .height(38.dp)
                         .glassTopBarSurface(
                             shape = ContinuousCapsule,
-                            fallbackColor = Color(0xFFF4F5F7),
+                            fallbackColor = barFallback,
                             pressEffect = false,
                         )
                         .clickable(onClick = onBackToInput)
@@ -133,7 +138,7 @@ fun SearchResultPage(
                     Icon(
                         imageVector = Icons.Default.Search,
                         contentDescription = "重新编辑",
-                        tint = Color(0xFF8A8F99),
+                        tint = onSurfaceVariant,
                         modifier = Modifier.size(18.dp),
                     )
                     Spacer(modifier = Modifier.width(8.dp))
@@ -141,7 +146,7 @@ fun SearchResultPage(
                     Box(modifier = Modifier.weight(1f)) {
                         Text(
                             text = state.keyword.ifEmpty { "搜索影片、演员、剧集..." },
-                            color = if (state.keyword.isEmpty()) Color(0xFF8A8F99) else Color(0xFF1F2329),
+                            color = if (state.keyword.isEmpty()) onSurfaceVariant else onSurface,
                             fontSize = 14.5.sp,
                             fontWeight = if (state.keyword.isEmpty()) FontWeight.Normal else FontWeight.Medium,
                             maxLines = 1,
@@ -157,25 +162,25 @@ fun SearchResultPage(
             Box(
                 modifier = Modifier
                     .size(40.dp)
-                    .glassTopBarSurface(CircleShape, Color(0xFFF4F5F7))
-                .clickable(onClick = onToggleColumn),
+                    .glassTopBarSurface(CircleShape, barFallback)
+                    .clickable(onClick = onToggleColumn),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     imageVector = if (state.isDoubleColumn) Icons.Default.ViewAgenda else Icons.Default.GridView,
                     contentDescription = "切换单双列",
-                    tint = Color(0xFF1F2329),
+                    tint = onSurface,
                     modifier = Modifier.size(20.dp),
                 )
             }
         }
 
-        // 主体双栏布局：左右各一块白色圆角面板，灰底缝隙即分区（以面代线，替代竖向分割线）
+        // 主体双栏布局：左右各一块圆角表面面板，底色缝隙即分区（以面代线，替代竖向分割线）
         Row(modifier = Modifier.fillMaxSize()) {
-            // 左侧站点侧边栏：整体白色圆角面板 + 胶囊条目（宽度 110dp，对齐 MewPlayer adapter_collect）
+            // 左侧站点侧边栏：圆角面板 + 胶囊条目（宽度 110dp，对齐 MewPlayer adapter_collect）
             Surface(
                 shape = RoundedCornerShape(12.dp),
-                color = Color.White,
+                color = MaterialTheme.colorScheme.surface,
                 modifier = Modifier
                     .width(110.dp)
                     .fillMaxHeight()
@@ -201,13 +206,13 @@ fun SearchResultPage(
                 }
             }
 
-            // 栏间留白：中间露出页面灰底，天然形成视觉分区
+            // 栏间留白：中间露出页面底色，天然形成视觉分区
             Spacer(modifier = Modifier.width(8.dp))
 
-            // 右侧搜索结果展示区：白色圆角面板
+            // 右侧搜索结果展示区：圆角面板
             Surface(
                 shape = RoundedCornerShape(12.dp),
-                color = Color.White,
+                color = MaterialTheme.colorScheme.surface,
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight()
@@ -222,8 +227,8 @@ fun SearchResultPage(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(2.5.dp),
-                        color = Color(0xFF217AF4),
-                        trackColor = Color(0xFFE8F2FF),
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.primaryContainer,
                     )
                 }
                 when {
@@ -254,7 +259,7 @@ fun SearchResultPage(
                             items(displayedVods, key = { "${it.siteKey}_${it.vodId}" }) { vod ->
                                 VodCard(
                                     vod = vod,
-                                    showSite = true,
+                                    showSite = state.selectedSiteKey == null,
                                     onClick = { onVodClick(vod) },
                                 )
                             }
@@ -296,7 +301,7 @@ private fun CollectSidebarItem(
     Surface(
         onClick = onClick,
         shape = ContinuousCapsule,
-        color = if (isSelected) MaterialTheme.colorScheme.primary else Color(0xFFF0F4FA),
+        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
         modifier = modifier
             .fillMaxWidth()
             .height(34.dp),
@@ -311,7 +316,7 @@ private fun CollectSidebarItem(
                 text = "$name $count",
                 fontSize = 13.sp,
                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                color = if (isSelected) Color.White else Color(0xFF333842),
+                color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )

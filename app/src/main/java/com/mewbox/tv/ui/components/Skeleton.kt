@@ -41,6 +41,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.kyant.capsule.ContinuousCapsule
+import com.mewbox.tv.ui.theme.MewBoxTheme
 import kotlin.math.hypot
 
 /**
@@ -102,30 +103,29 @@ fun SkeletonBox(
 @Composable
 fun VodGridSkeleton(
     modifier: Modifier = Modifier,
-    aspectRatio: Float = 0.72f,
-    cornerRadius: Dp = 8.dp,
+    aspectRatio: Float = 2f / 3f,
+    cornerRadius: Dp = 10.dp,
     titleLine: Dp = 14.dp,
 ) {
     Column(
         modifier = modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally,
+        horizontalAlignment = Alignment.Start,
     ) {
         SkeletonBox(
             modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(aspectRatio)
-                .clip(RoundedCornerShape(cornerRadius)),
+                .aspectRatio(aspectRatio),
             shape = RoundedCornerShape(cornerRadius),
         )
         Spacer(modifier = Modifier.height(6.dp))
         SkeletonBox(
             modifier = Modifier
+                .padding(start = 2.dp)
                 .fillMaxWidth(0.72f)
-                .height(titleLine)
-                .clip(RoundedCornerShape(4.dp)),
+                .height(titleLine),
             shape = RoundedCornerShape(4.dp),
         )
-        Spacer(modifier = Modifier.height(4.dp))
+        Spacer(modifier = Modifier.height(2.dp))
     }
 }
 
@@ -137,13 +137,15 @@ fun VodGridSkeletonGroup(
     modifier: Modifier = Modifier,
     count: Int = 18,
     columns: Int = 3,
-    contentPadding: PaddingValues = PaddingValues(start = 10.dp, end = 10.dp, top = 4.dp, bottom = 96.dp),
+    contentPadding: PaddingValues = PaddingValues(start = 14.dp, end = 14.dp, top = 6.dp, bottom = 120.dp),
+    horizontalSpacing: Dp = 10.dp,
+    verticalSpacing: Dp = 14.dp,
 ) {
     LazyVerticalGrid(
         columns = GridCells.Fixed(columns),
         contentPadding = contentPadding,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(horizontalSpacing),
+        verticalArrangement = Arrangement.spacedBy(verticalSpacing),
         modifier = modifier.fillMaxSize(),
         userScrollEnabled = false,
     ) {
@@ -162,8 +164,8 @@ fun VodListSkeleton(
 ) {
     Surface(
         shape = RoundedCornerShape(12.dp),
-        color = Color(0xFFF8F9FB),
-        border = BorderStroke(1.dp, Color(0xFFECEEF2)),
+        color = MewBoxTheme.colors.searchCardBg,
+        border = BorderStroke(1.dp, MewBoxTheme.colors.cardBorder),
         modifier = modifier
             .fillMaxWidth()
             .height(116.dp),
