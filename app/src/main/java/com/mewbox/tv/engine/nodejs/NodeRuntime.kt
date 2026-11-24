@@ -6,6 +6,7 @@ import com.fongmi.nodejs.NodeClient
 import com.mewbox.tv.api.config.SettingsRepository
 import com.mewbox.tv.api.net.LocalMessageBridge
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -59,11 +60,37 @@ class NodeRuntime @Inject constructor(
     private val resultChannel = Channel<NodeBootEvent>(Channel.BUFFERED)
     val results: Flow<NodeBootEvent> = resultChannel.receiveAsFlow()
 
+    val serverAddress: StateFlow<String>
+        get() = client.addressFlow
+
+    val t4ShareActive: StateFlow<Boolean>
+        get() = client.foregroundActiveFlow
+
     fun isConfig(url: String): Boolean = NodeBundle.isConfig(url)
 
     fun isLocalNodeSource(url: String): Boolean = NodeBundle.isLocalNodeSource(url)
 
     fun isRunning(): Boolean = client.isRunning()
+
+    fun shouldKeepAliveOnExit(): Boolean = client.isForegroundShareActive()
+
+    suspend fun enableT4Share(): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val targetSource = settings.currentConfigUrl.takeIf { isConfig(it) }
+            val started = ensureStarted(source = targetSource, notify = false, showLoading = false)
+            if (!started) {
+                return@withContext Result.failure(IllegalStateException("请先配置 Node.js 订阅源"))
+            }
+            client.startForegroundShare()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    fun disableT4Share() = client.stopForegroundShare()
 
     suspend fun ensureStarted(
         source: String? = null,

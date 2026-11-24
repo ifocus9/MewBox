@@ -1,16 +1,27 @@
 package com.fongmi.nodejs
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Binder
+import android.os.Build
 import android.os.IBinder
+import android.os.Parcel
 import android.os.Process
 import androidx.annotation.Keep
+import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
-import java.io.InputStream
+import java.net.InetSocketAddress
 import java.net.Proxy
+import java.net.Socket
+import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -24,16 +35,42 @@ import org.json.JSONObject
 @Keep
 class NodeService : Service() {
 
-    private val binder = Binder()
+    private val foregroundActive = AtomicBoolean(false)
+    @Volatile private var lastAddress: String? = null
+    @Volatile private var lastVersion: String = ""
+    @Volatile private var lastArch: String = ""
+
+    private val binder = object : Binder() {
+        override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
+            if (code == TRANSACTION_QUERY_STATE) {
+                data.enforceInterface(BINDER_DESCRIPTOR)
+                reply?.writeNoException()
+                reply?.writeInt(if (foregroundActive.get()) 1 else 0)
+                return true
+            }
+            return super.onTransact(code, data, reply, flags)
+        }
+    }
     private val started = AtomicBoolean()
 
     companion object {
         const val ACTION_START = "com.fongmi.nodejs.START"
+        const val ACTION_START_FOREGROUND = "com.fongmi.nodejs.START_FOREGROUND"
+        const val ACTION_STOP_FOREGROUND = "com.fongmi.nodejs.STOP_FOREGROUND"
+        const val ACTION_FOREGROUND_STATE_CHANGED = "com.fongmi.nodejs.FOREGROUND_STATE_CHANGED"
         const val EXTRA_INDEX = "index"
         const val EXTRA_CONFIG = "config"
         const val EXTRA_DATA = "data"
         const val EXTRA_BRIDGE_PORT = "bridgePort"
         const val EXTRA_TOKEN = "token"
+        const val EXTRA_ADDRESS = "address"
+        const val EXTRA_VERSION = "version"
+        const val EXTRA_ARCH = "arch"
+        const val EXTRA_FOREGROUND_ACTIVE = "foregroundActive"
+        const val BINDER_DESCRIPTOR = "com.fongmi.nodejs.NodeService"
+        const val TRANSACTION_QUERY_STATE = IBinder.FIRST_CALL_TRANSACTION + 1
+        private const val NOTIFICATION_CHANNEL_ID = "mewbox_node_t4_share"
+        private const val NOTIFICATION_ID = 9988
         private const val HEADER_TOKEN = "X-CatVod-Token"
         private val JSON = "application/json; charset=utf-8".toMediaType()
         private val CLIENT = OkHttpClient.Builder()
@@ -48,8 +85,36 @@ class NodeService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        start(intent)
-        return START_NOT_STICKY
+        if (intent == null) {
+            if (!started.get() && lastAddress.isNullOrBlank()) {
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            return if (foregroundActive.get()) START_STICKY else START_NOT_STICKY
+        }
+        return when (intent.action) {
+            ACTION_START_FOREGROUND -> {
+                intent.getStringExtra(EXTRA_ADDRESS)?.takeIf { it.isNotBlank() }?.let { lastAddress = it }
+                intent.getStringExtra(EXTRA_VERSION)?.takeIf { it.isNotBlank() }?.let { lastVersion = it }
+                intent.getStringExtra(EXTRA_ARCH)?.takeIf { it.isNotBlank() }?.let { lastArch = it }
+                enterForeground()
+                foregroundActive.set(true)
+                notifyForegroundStateChanged(true)
+                START_STICKY
+            }
+            ACTION_STOP_FOREGROUND -> {
+                foregroundActive.set(false)
+                ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+                notifyForegroundStateChanged(false)
+                stopSelf()
+                START_NOT_STICKY
+            }
+            ACTION_START -> {
+                start(intent)
+                if (foregroundActive.get()) START_STICKY else START_NOT_STICKY
+            }
+            else -> if (foregroundActive.get()) START_STICKY else START_NOT_STICKY
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder {
@@ -59,17 +124,115 @@ class NodeService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        if (foregroundActive.getAndSet(false)) {
+            notifyForegroundStateChanged(false)
+        }
         Process.killProcess(Process.myPid())
     }
 
     fun start(intent: Intent?) {
-        if (intent == null || intent.action != ACTION_START || !started.compareAndSet(false, true)) return
+        if (intent == null || intent.action != ACTION_START) return
         val index = intent.getStringExtra(EXTRA_INDEX)
         val config = intent.getStringExtra(EXTRA_CONFIG)
         val data = intent.getStringExtra(EXTRA_DATA)
         val bridgePort = intent.getIntExtra(EXTRA_BRIDGE_PORT, 0)
         val token = intent.getStringExtra(EXTRA_TOKEN)
+        if (!started.compareAndSet(false, true)) {
+            if (!lastAddress.isNullOrBlank()) {
+                Thread({ reportExistingServerIfAlive(bridgePort, token) }, "nodejs-reconnect").start()
+            }
+            return
+        }
         Thread({ start(index, config, data, bridgePort, token) }, "nodejs-runtime").start()
+    }
+
+    private fun enterForeground() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val manager = getSystemService(NotificationManager::class.java)
+            if (manager != null && manager.getNotificationChannel(NOTIFICATION_CHANNEL_ID) == null) {
+                val channel = NotificationChannel(
+                    NOTIFICATION_CHANNEL_ID,
+                    "T4 后台服务",
+                    NotificationManager.IMPORTANCE_LOW,
+                ).apply {
+                    setShowBadge(false)
+                    enableVibration(false)
+                    setSound(null, null)
+                }
+                manager.createNotificationChannel(channel)
+            }
+        }
+        val fgType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+        } else {
+            0
+        }
+        ServiceCompat.startForeground(this, NOTIFICATION_ID, buildForegroundNotification(), fgType)
+    }
+
+    private fun buildForegroundNotification(): Notification {
+        val contentIntent = packageManager.getLaunchIntentForPackage(packageName)?.let { launch ->
+            launch.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            PendingIntent.getActivity(
+                this,
+                0,
+                launch,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+        }
+        val stopIntent = Intent(this, NodeService::class.java).setAction(ACTION_STOP_FOREGROUND)
+        val stopPendingIntent = PendingIntent.getService(
+            this,
+            1,
+            stopIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val t4Url = lastAddress?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() }?.let { "$it/t4/config" }.orEmpty()
+        return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setContentTitle("MewBox T4 服务运行中")
+            .setContentText(t4Url.ifBlank { "本地节点服务持续运行中" })
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .apply {
+                if (contentIntent != null) setContentIntent(contentIntent)
+            }
+            .addAction(0, "停止", stopPendingIntent)
+            .build()
+    }
+
+    private fun notifyForegroundStateChanged(active: Boolean) {
+        sendBroadcast(
+            Intent(ACTION_FOREGROUND_STATE_CHANGED)
+                .setPackage(packageName)
+                .putExtra(EXTRA_FOREGROUND_ACTIVE, active),
+        )
+    }
+
+    private fun reportExistingServerIfAlive(bridgePort: Int, token: String?) {
+        val addr = lastAddress ?: return
+        if (isServerPortAlive(addr)) {
+            reportStarted(bridgePort, token, addr)
+        } else {
+            reportError(bridgePort, token, "Node server port unreachable")
+            Process.killProcess(Process.myPid())
+        }
+    }
+
+    private fun isServerPortAlive(address: String): Boolean {
+        return try {
+            val uri = URI(address)
+            val host = uri.host?.takeIf { it.isNotBlank() } ?: "127.0.0.1"
+            val port = uri.port
+            if (port <= 0) return false
+            Socket().use { socket ->
+                socket.connect(InetSocketAddress(host, port), 500)
+            }
+            true
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun start(index: String?, config: String?, data: String?, bridgePort: Int, token: String?) {
@@ -155,18 +318,32 @@ class NodeService : Service() {
         return target
     }
 
+    private fun reportStarted(port: Int, token: String?, address: String) {
+        if (port <= 0) return
+        try {
+            val options = JSONObject()
+                .put("address", address)
+                .put("token", token.orEmpty())
+                .put("pid", Process.myPid())
+                .put("version", lastVersion)
+                .put("arch", lastArch)
+            CLIENT.newCall(bridgeRequest(port, token, "serverStarted", options)).execute().close()
+        } catch (_: Exception) {
+        }
+    }
+
     private fun reportError(port: Int, token: String?, message: String) {
         if (port <= 0) return
         try {
-            CLIENT.newCall(errorRequest(port, token, message)).execute().close()
+            val options = JSONObject().put("token", token).put("message", message)
+            CLIENT.newCall(bridgeRequest(port, token, "nodeError", options)).execute().close()
         } catch (_: Exception) {
         }
     }
 
     @Throws(JSONException::class)
-    private fun errorRequest(port: Int, token: String?, message: String): Request {
-        val options = JSONObject().put("token", token).put("message", message)
-        val body = JSONObject().put("action", "nodeError").put("opt", options)
+    private fun bridgeRequest(port: Int, token: String?, action: String, options: JSONObject): Request {
+        val body = JSONObject().put("action", action).put("opt", options)
         val bytes = body.toString().toByteArray(StandardCharsets.UTF_8)
         return Request.Builder()
             .url("http://127.0.0.1:$port/msg")

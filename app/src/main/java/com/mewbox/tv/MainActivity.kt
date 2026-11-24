@@ -214,7 +214,9 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
         if (isFinishing) {
             htmlWebController.destroyWebView()
-            nodeRuntime.clear()
+            if (!nodeRuntime.shouldKeepAliveOnExit()) {
+                nodeRuntime.clear()
+            }
         }
     }
 }

@@ -1,5 +1,20 @@
 package com.mewbox.tv.ui.setting
 
+import android.Manifest
+import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.mewbox.tv.util.AppToast
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -25,6 +40,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -32,6 +48,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -51,6 +68,8 @@ fun SettingsScreen(
     onNavigateToTmdb: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var showConfigDialog by rememberSaveable { mutableStateOf(false) }
     var configDialogIsEdit by rememberSaveable { mutableStateOf(false) }
@@ -60,6 +79,53 @@ fun SettingsScreen(
     var showAboutDialog by rememberSaveable { mutableStateOf(false) }
     var showDoubanDialog by rememberSaveable { mutableStateOf(false) }
     var showThemeColorPicker by rememberSaveable { mutableStateOf(false) }
+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { _ ->
+        viewModel.setT4ShareEnabled(true)
+    }
+
+    val handleT4ShareToggle: (Boolean) -> Unit = { target ->
+        if (!target) {
+            viewModel.setT4ShareEnabled(false)
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            viewModel.setT4ShareEnabled(true)
+        }
+    }
+
+    val copyT4Url: (String, String) -> Unit = { label, url ->
+        val clipboard = context.getSystemService(ClipboardManager::class.java)
+        clipboard?.setPrimaryClip(ClipData.newPlainText("T4 订阅地址", url))
+        AppToast.show("已复制${label} T4 地址")
+    }
+
+    val openBatterySettings: () -> Unit = {
+        val primary = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+        try {
+            context.startActivity(primary)
+        } catch (_: ActivityNotFoundException) {
+            val fallback = Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.fromParts("package", context.packageName, null),
+            )
+            runCatching { context.startActivity(fallback) }
+        }
+    }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.refreshT4ShareInfo()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     LaunchedEffect(Unit) {
         viewModel.loadCacheSize()
@@ -137,6 +203,17 @@ fun SettingsScreen(
                                 AppToast.show("没有可切换的订阅")
                             }
                         },
+                    )
+                    SettingDivider()
+                    T4ShareSection(
+                        enabled = state.t4ShareEnabled,
+                        switching = state.t4ShareSwitching,
+                        localUrl = state.t4LocalUrl,
+                        lanUrl = state.t4LanUrl,
+                        batteryOptimizationIgnored = state.batteryOptimizationIgnored,
+                        onToggle = handleT4ShareToggle,
+                        onCopyUrl = copyT4Url,
+                        onOpenBatterySettings = openBatterySettings,
                     )
                     SettingDivider()
                     SettingRow(

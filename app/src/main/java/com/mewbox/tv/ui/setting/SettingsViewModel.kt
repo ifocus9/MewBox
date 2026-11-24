@@ -2,6 +2,7 @@ package com.mewbox.tv.ui.setting
 
 import android.content.Context
 import android.net.Uri
+import android.os.PowerManager
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.fongmi.nodejs.NodeClient
@@ -18,6 +19,7 @@ import com.mewbox.tv.catvod.SpiderRouter
 import com.mewbox.tv.db.ConfigDao
 import com.mewbox.tv.db.SiteDao
 import com.mewbox.tv.engine.nodejs.NodeRuntime
+import com.mewbox.tv.engine.nodejs.NodeT4Endpoint
 import com.mewbox.tv.ui.theme.applyApplicationNightMode
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -49,6 +51,11 @@ data class SettingsUiState(
     val doubanUid: String = "",
     val themeMode: ThemeMode = ThemeMode.Auto,
     val themeColorArgb: Int = ThemeColor.DEFAULT_ARGB,
+    val t4ShareEnabled: Boolean = false,
+    val t4ShareSwitching: Boolean = false,
+    val t4LocalUrl: String = "",
+    val t4LanUrl: String = "",
+    val batteryOptimizationIgnored: Boolean = true,
     val importing: Boolean = false,
     /** 是否展示导入遮罩：Node.js 源交给全局 loading，避免两层提示叠加 */
     val showImportOverlay: Boolean = false,
@@ -65,6 +72,7 @@ class SettingsViewModel @Inject constructor(
     private val settings: SettingsRepository,
     private val router: SpiderRouter,
     private val tmdbRepository: TmdbRepository,
+    private val nodeRuntime: NodeRuntime,
 ) : ViewModel() {
 
     private data class Transient(
@@ -73,8 +81,32 @@ class SettingsViewModel @Inject constructor(
         val message: String? = null,
     )
 
+    private data class BaseSettingsSnapshot(
+        val sites: List<Site>,
+        val host: String,
+        val configs: List<Config>,
+        val tmdb: TmdbConfig,
+        val uid: String,
+        val url: String,
+        val themeMode: ThemeMode,
+        val themeColorArgb: Int,
+        val cache: String,
+        val transient: Transient,
+    )
+
+    private data class T4ShareState(
+        val active: Boolean,
+        val switching: Boolean,
+        val serverAddress: String,
+        val lanIp: String?,
+        val batteryIgnored: Boolean,
+    )
+
     private val transient = MutableStateFlow(Transient())
     private val cacheSizeFlow = MutableStateFlow("0.0 MB")
+    private val lanIpFlow = MutableStateFlow<String?>(null)
+    private val batteryIgnoredFlow = MutableStateFlow(true)
+    private val t4SwitchingFlow = MutableStateFlow(false)
 
     private val _navigateHomeEvents = MutableSharedFlow<Unit>(replay = 0, extraBufferCapacity = 1)
     val navigateHomeEvents: SharedFlow<Unit> = _navigateHomeEvents.asSharedFlow()
@@ -82,6 +114,7 @@ class SettingsViewModel @Inject constructor(
     init {
         loadCacheSize()
         sanitizeConfigNames()
+        refreshT4ShareInfo()
     }
 
     /** 清理早期版本自动写入的「订阅 N」占位名。 */
@@ -93,26 +126,62 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    val uiState: StateFlow<SettingsUiState> = combine(
+    private val baseDataFlow = combine(
         combine(siteDao.observeAll(), settings.hostMappingFlow) { sites, host -> sites to host },
         combine(configDao.observeAll(), tmdbRepository.tmdbConfigFlow, settings.doubanUidFlow) { configs, tmdb, uid -> Triple(configs, tmdb, uid) },
         combine(settings.configUrlFlow, settings.themeModeFlow, settings.themeColorArgbFlow) { url, themeMode, themeColorArgb -> Triple(url, themeMode, themeColorArgb) },
         cacheSizeFlow,
         transient,
     ) { (sites, host), (configs, tmdb, uid), (url, themeMode, themeColorArgb), cache, t ->
-        SettingsUiState(
-            sites = sites.filter { !it.hide }.map { SiteItem(it, router.isSupported(it)) },
+        BaseSettingsSnapshot(
+            sites = sites,
+            host = host,
             configs = configs,
-            savedHost = host,
-            savedConfigUrl = url,
-            cacheSize = cache,
-            tmdbConfig = tmdb,
-            doubanUid = uid,
+            tmdb = tmdb,
+            uid = uid,
+            url = url,
             themeMode = themeMode,
             themeColorArgb = themeColorArgb,
-            importing = t.importing,
-            showImportOverlay = t.importing && t.showOverlay,
-            message = t.message,
+            cache = cache,
+            transient = t,
+        )
+    }
+
+    private val t4ShareFlow = combine(
+        nodeRuntime.t4ShareActive,
+        t4SwitchingFlow,
+        nodeRuntime.serverAddress,
+        lanIpFlow,
+        batteryIgnoredFlow,
+    ) { active, switching, address, lanIp, batteryIgnored ->
+        T4ShareState(
+            active = active,
+            switching = switching,
+            serverAddress = address,
+            lanIp = lanIp,
+            batteryIgnored = batteryIgnored,
+        )
+    }
+
+    val uiState: StateFlow<SettingsUiState> = combine(baseDataFlow, t4ShareFlow) { base, t4 ->
+        SettingsUiState(
+            sites = base.sites.filter { !it.hide }.map { SiteItem(it, router.isSupported(it)) },
+            configs = base.configs,
+            savedHost = base.host,
+            savedConfigUrl = base.url,
+            cacheSize = base.cache,
+            tmdbConfig = base.tmdb,
+            doubanUid = base.uid,
+            themeMode = base.themeMode,
+            themeColorArgb = base.themeColorArgb,
+            t4ShareEnabled = t4.active,
+            t4ShareSwitching = t4.switching,
+            t4LocalUrl = NodeT4Endpoint.buildLocalT4Url(t4.serverAddress),
+            t4LanUrl = NodeT4Endpoint.buildLanT4Url(t4.serverAddress, t4.lanIp),
+            batteryOptimizationIgnored = t4.batteryIgnored,
+            importing = base.transient.importing,
+            showImportOverlay = base.transient.importing && base.transient.showOverlay,
+            message = base.transient.message,
         )
     }.stateIn(
         viewModelScope,
@@ -122,6 +191,40 @@ class SettingsViewModel @Inject constructor(
             themeColorArgb = settings.currentThemeColorArgb,
         ),
     )
+
+    fun refreshT4ShareInfo() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val lanIp = NodeT4Endpoint.resolveLanIpv4()
+            val powerManager = context.getSystemService(PowerManager::class.java)
+            val ignored = powerManager?.isIgnoringBatteryOptimizations(context.packageName) ?: true
+            lanIpFlow.value = lanIp
+            batteryIgnoredFlow.value = ignored
+        }
+    }
+
+    fun setT4ShareEnabled(enabled: Boolean) {
+        if (t4SwitchingFlow.value) return
+        if (!enabled) {
+            nodeRuntime.disableT4Share()
+            transient.update { it.copy(message = "已关闭 T4 后台服务") }
+            return
+        }
+        t4SwitchingFlow.value = true
+        viewModelScope.launch {
+            try {
+                nodeRuntime.enableT4Share()
+                    .onSuccess {
+                        refreshT4ShareInfo()
+                        transient.update { it.copy(message = "T4 后台服务已开启") }
+                    }
+                    .onFailure { err ->
+                        transient.update { it.copy(message = "开启失败：${NodeRuntime.describe(err)}") }
+                    }
+            } finally {
+                t4SwitchingFlow.value = false
+            }
+        }
+    }
 
     fun loadCacheSize() {
         viewModelScope.launch(Dispatchers.IO) {

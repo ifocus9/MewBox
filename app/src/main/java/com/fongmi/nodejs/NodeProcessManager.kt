@@ -1,11 +1,18 @@
 package com.fongmi.nodejs
 
+import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.ServiceConnection
 import android.os.IBinder
+import android.os.Parcel
 import android.os.RemoteException
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
@@ -21,6 +28,12 @@ import java.util.concurrent.TimeUnit
 internal class NodeProcessManager(context: Context) {
 
     private val context: Context = context.applicationContext ?: context
+
+    private val _addressFlow = MutableStateFlow("")
+    val addressFlow: StateFlow<String> = _addressFlow.asStateFlow()
+
+    private val _foregroundActiveFlow = MutableStateFlow(false)
+    val foregroundActiveFlow: StateFlow<Boolean> = _foregroundActiveFlow.asStateFlow()
 
     @Volatile var address: String? = null
         private set
@@ -41,7 +54,47 @@ internal class NodeProcessManager(context: Context) {
     @Volatile private var startError: Exception? = null
     @Volatile private var connection: NodeConnection? = null
 
+    private val foregroundReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != NodeService.ACTION_FOREGROUND_STATE_CHANGED) return
+            val active = intent.getBooleanExtra(NodeService.EXTRA_FOREGROUND_ACTIVE, false)
+            _foregroundActiveFlow.value = active
+        }
+    }
+
+    init {
+        ContextCompat.registerReceiver(
+            this.context,
+            foregroundReceiver,
+            IntentFilter(NodeService.ACTION_FOREGROUND_STATE_CHANGED),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+    }
+
     fun isRunning(): Boolean = !address.isNullOrEmpty() && connection?.isAlive() == true
+
+    fun isForegroundActive(): Boolean = _foregroundActiveFlow.value
+
+    fun startForegroundShare() {
+        val intent = Intent(context, NodeService::class.java)
+            .setAction(NodeService.ACTION_START_FOREGROUND)
+            .putExtra(NodeService.EXTRA_ADDRESS, address.orEmpty())
+            .putExtra(NodeService.EXTRA_VERSION, nodeVersion)
+            .putExtra(NodeService.EXTRA_ARCH, nodeArch)
+        ContextCompat.startForegroundService(context, intent)
+        _foregroundActiveFlow.value = true
+    }
+
+    fun stopForegroundShare() {
+        _foregroundActiveFlow.value = false
+        try {
+            context.startService(
+                Intent(context, NodeService::class.java).setAction(NodeService.ACTION_STOP_FOREGROUND),
+            )
+        } catch (e: IllegalStateException) {
+            Timber.w(e, "停止 T4 前台服务时后台启动受限")
+        }
+    }
 
     fun beginSession(newToken: String): Long {
         generation++
@@ -57,6 +110,7 @@ internal class NodeProcessManager(context: Context) {
         checkCanceled: () -> Unit,
     ) {
         address = null
+        _addressFlow.value = ""
         startError = null
         val latch = CountDownLatch(1)
         startLatch = latch
@@ -88,6 +142,7 @@ internal class NodeProcessManager(context: Context) {
     }
 
     fun stopService() {
+        _foregroundActiveFlow.value = false
         val current = connection
         if (current != null) {
             synchronized(current) {
@@ -104,6 +159,8 @@ internal class NodeProcessManager(context: Context) {
 
     fun resetState() {
         address = null
+        _addressFlow.value = ""
+        _foregroundActiveFlow.value = false
         token = null
         startLatch = null
         startError = null
@@ -116,6 +173,7 @@ internal class NodeProcessManager(context: Context) {
 
     fun invalidateAddressAndBumpGeneration() {
         address = null
+        _addressFlow.value = ""
         generation++
     }
 
@@ -132,7 +190,9 @@ internal class NodeProcessManager(context: Context) {
                     generation++
                     current.connGeneration = generation
                 }
-                address = value.replace("://localhost:", "://127.0.0.1:")
+                val resolvedAddress = value.replace("://localhost:", "://127.0.0.1:")
+                address = resolvedAddress
+                _addressFlow.value = resolvedAddress
                 nodePid = incomingPid
                 nodeVersion = opt["version"]?.jsonPrimitive?.content.orEmpty()
                 nodeArch = opt["arch"]?.jsonPrimitive?.content.orEmpty()
@@ -155,6 +215,8 @@ internal class NodeProcessManager(context: Context) {
 
     private fun onServiceLost(message: String) {
         address = null
+        _addressFlow.value = ""
+        _foregroundActiveFlow.value = false
         generation++
         if (startError == null) startError = IOException(message)
         startLatch?.countDown()
@@ -186,11 +248,31 @@ internal class NodeProcessManager(context: Context) {
             binder = service
             try {
                 service?.linkToDeath(this, 0)
+                if (service != null) {
+                    queryRemoteState(service)
+                }
             } catch (_: RemoteException) {
                 stopped.countDown()
                 notifyLost("Node service died while binding")
             } finally {
                 connected.countDown()
+            }
+        }
+
+        private fun queryRemoteState(service: IBinder) {
+            val data = Parcel.obtain()
+            val reply = Parcel.obtain()
+            try {
+                data.writeInterfaceToken(NodeService.BINDER_DESCRIPTOR)
+                if (service.transact(NodeService.TRANSACTION_QUERY_STATE, data, reply, 0)) {
+                    reply.readException()
+                    val active = reply.readInt() != 0
+                    _foregroundActiveFlow.value = active
+                }
+            } catch (_: Exception) {
+            } finally {
+                reply.recycle()
+                data.recycle()
             }
         }
 

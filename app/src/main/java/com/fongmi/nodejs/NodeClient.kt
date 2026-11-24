@@ -2,6 +2,7 @@ package com.fongmi.nodejs
 
 import android.content.Context
 import com.mewbox.tv.api.net.LocalMessageBridge
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -175,7 +176,19 @@ class NodeClient(
         }
     }
 
+    val addressFlow: StateFlow<String>
+        get() = processManager.addressFlow
+
+    val foregroundActiveFlow: StateFlow<Boolean>
+        get() = processManager.foregroundActiveFlow
+
     fun isRunning(): Boolean = processManager.isRunning()
+
+    fun isForegroundShareActive(): Boolean = processManager.isForegroundActive()
+
+    fun startForegroundShare() = processManager.startForegroundShare()
+
+    fun stopForegroundShare() = processManager.stopForegroundShare()
 
     fun isSameVersion(other: NodeBundle?): Boolean = bundle?.isSameVersion(other) == true
 
@@ -351,6 +364,7 @@ class NodeClient(
     private fun start(prepared: NodeBundle) {
         checkLoadCanceled()
         cancelRequests()
+        val restoreForeground = processManager.isForegroundActive()
         processManager.stopService()
         bundle = prepared
         val sessionToken = UUID.randomUUID().toString()
@@ -358,6 +372,9 @@ class NodeClient(
         messageBridge.token = sessionToken
         val bridgePort = messageBridge.start(LocalMessageBridge.DEFAULT_PORT)
         processManager.bindAndAwait(prepared, bridgePort, sessionToken) { checkLoadCanceled() }
+        if (restoreForeground) {
+            processManager.startForegroundShare()
+        }
     }
 
     fun clear() {
