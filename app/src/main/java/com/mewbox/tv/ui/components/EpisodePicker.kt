@@ -21,7 +21,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.SwapVert
+import androidx.compose.material.icons.rounded.Compress
+import androidx.compose.material.icons.rounded.SwapVert
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -49,7 +50,7 @@ import androidx.compose.material3.MaterialTheme
 /**
  * 选集面板样式（完全对齐 MewPlayer 播放页右侧选集面板 EpisodeListDialog）：
  * 近黑底、白色粗体标题、胶囊按钮、文字分段标签（1-20 / 21-40）+ 一集占一整行、纵向滚动的列表。
- * 选中项按钮背景填主色、无描边、文字白色（主色由各抽屉注入：播放页蓝、详情页海报派生色）。
+ * 选中项按钮为半透明主色底 + 主色文字、无描边（主色由各抽屉注入：播放页蓝、详情页海报派生色）。
  *
  * 详情页（海报页）底部抽屉与全屏右侧面板共用这一套内容，只在外层决定容器形态。
  */
@@ -85,11 +86,14 @@ data class EpisodePickerColors(
     val textPrimary: Color,
     val textMeta: Color,
     val accent: Color,
-    /** 选中态底色；null = 用 accent 实底（详情页浅色抽屉的默认行为） */
+    /** 选中态底色；null = 回退到 accent 实底 */
     val selectedBg: Color? = null,
-    /** 选中态文字色；null = 用白色（详情页浅色抽屉的默认行为） */
+    /** 选中态文字色；null = 回退到白色 */
     val selectedText: Color? = null,
 )
+
+/** 选中态主色底透明度：播放页与海报页选集抽屉共用，保证两处选中观感一致 */
+const val EPISODE_SELECTED_BG_ALPHA = 0.28f
 
 /** 播放页右侧抽屉默认配色：选中态为半透明主色底 + 主色文字，参考芒果TV选集抽屉；不传 colors 即用此值 */
 val PanelPickerColors: EpisodePickerColors
@@ -103,7 +107,7 @@ val PanelPickerColors: EpisodePickerColors
             textPrimary = PanelTextPrimary,
             textMeta = PanelTextMeta,
             accent = accent,
-            selectedBg = accent.copy(alpha = 0.28f),
+            selectedBg = accent.copy(alpha = EPISODE_SELECTED_BG_ALPHA),
             selectedText = accent,
         )
     }
@@ -281,6 +285,7 @@ private fun EpisodePickerHeader(
         EpisodePickerPill(
             text = "精简",
             selected = isCompact,
+            icon = Icons.Rounded.Compress,
             onClick = onToggleCompact,
             colors = colors,
         )
@@ -288,14 +293,14 @@ private fun EpisodePickerHeader(
         EpisodePickerPill(
             text = "倒序",
             selected = isReversed,
-            icon = Icons.Default.SwapVert,
+            icon = Icons.Rounded.SwapVert,
             onClick = onToggleReverse,
             colors = colors,
         )
     }
 }
 
-/** 胶囊按钮：未选中纯底色、文字主色；选中填主色底、文字白色（均无描边） */
+/** 胶囊按钮：未选中纯底色、正文色；选中半透明主色底 + 主色文字（均无描边） */
 @Composable
 private fun EpisodePickerPill(
     text: String,
@@ -335,7 +340,7 @@ private fun EpisodePickerPill(
     }
 }
 
-/** 分段标签：与集数卡片同款胶囊，选中填主色底 + 白字，未选中纯底色无描边，随列表滚动自动切换 */
+/** 分段标签：与集数卡片同款胶囊，选中半透明主色底 + 主色文字，未选中纯底色无描边，随列表滚动自动切换 */
 @Composable
 private fun EpisodeGroupTabs(
     groups: List<EpisodeGroup>,
@@ -391,7 +396,7 @@ private fun EpisodeGroupTabs(
     }
 }
 
-/** 单集卡片：占一整行、40dp 高、6dp 圆角，选中填主色底、未选中纯底色，均无描边 */
+/** 单集卡片：占一整行、40dp 高、6dp 圆角，选中半透明主色底 + 主色文字、未选中纯底色，均无描边 */
 @Composable
 private fun EpisodeGridCell(
     name: String,

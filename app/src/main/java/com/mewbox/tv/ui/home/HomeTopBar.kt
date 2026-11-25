@@ -23,7 +23,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -138,7 +138,7 @@ fun HomeTopBar(
                             label = "siteArrowRotation",
                         )
                         Icon(
-                            imageVector = Icons.Default.ExpandMore,
+                            imageVector = Icons.Rounded.KeyboardArrowDown,
                             contentDescription = "切换站点",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier

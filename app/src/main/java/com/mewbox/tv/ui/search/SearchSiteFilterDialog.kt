@@ -31,10 +31,12 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Block
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.rounded.Block
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Inbox
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.SearchOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -238,7 +240,7 @@ private fun SearchSiteFilterSearchBar(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
-            imageVector = Icons.Default.Search,
+            imageVector = Icons.Rounded.Search,
             contentDescription = "搜索",
             tint = OverlayTokens.TextSecondary,
             modifier = Modifier.size(18.dp),
@@ -282,7 +284,7 @@ private fun SearchSiteFilterSearchBar(
                 modifier = Modifier.size(26.dp),
             ) {
                 Icon(
-                    imageVector = Icons.Default.Clear,
+                    imageVector = Icons.Rounded.Close,
                     contentDescription = "清除",
                     tint = OverlayTokens.TextSecondary,
                     modifier = Modifier.size(16.dp),
@@ -302,7 +304,7 @@ private fun SearchSiteEmptyState(keyword: String) {
         verticalArrangement = Arrangement.Center,
     ) {
         Icon(
-            imageVector = Icons.Default.Search,
+            imageVector = if (keyword.isBlank()) Icons.Rounded.Inbox else Icons.Rounded.SearchOff,
             contentDescription = null,
             tint = OverlayTokens.TextSecondary.copy(alpha = 0.45f),
             modifier = Modifier.size(28.dp),
@@ -365,7 +367,7 @@ private fun SearchSiteFilterItem(
 
                 if (isSelected) {
                     Icon(
-                        imageVector = Icons.Default.Check,
+                        imageVector = Icons.Rounded.Check,
                         contentDescription = "已指定搜索站源",
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(14.dp),
@@ -392,7 +394,7 @@ private fun SearchSiteFilterItem(
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        imageVector = if (site.isSearchable) Icons.Default.Search else Icons.Default.Block,
+                        imageVector = if (site.isSearchable) Icons.Rounded.Search else Icons.Rounded.SearchOff,
                         contentDescription = if (site.isSearchable) "禁用此源搜索" else "启用此源搜索",
                         tint = when {
                             site.isSearchable && isSelected -> MaterialTheme.colorScheme.primary
@@ -410,7 +412,7 @@ private fun SearchSiteFilterItem(
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Block,
+                        imageVector = Icons.Rounded.Block,
                         contentDescription = "源不支持搜索",
                         tint = OverlayTokens.TextSecondary.copy(alpha = 0.35f),
                         modifier = Modifier.size(15.dp),

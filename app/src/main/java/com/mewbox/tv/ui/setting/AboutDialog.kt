@@ -54,7 +54,7 @@ fun AboutDialog(
                         .padding(16.dp),
                 ) {
                     Text(
-                        text = "MewBox",
+                        text = "轻影",
                         fontSize = 17.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = TextPrimary,

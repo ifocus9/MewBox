@@ -22,7 +22,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -38,11 +38,11 @@ import com.mewbox.tv.ui.components.PillShape
 import com.mewbox.tv.ui.components.rememberEpisodeDisplayNames
 
 /**
- * 全屏播放时的右侧选集与线路面板。
+ * 全屏播放时的选集与线路自适应面板。
  *
- * 外壳由 [PlayerDrawerShell] 统一提供（贴右、无圆角、不透明深灰底、全高、
+ * 外壳由 [PlayerDrawerShell] 统一提供（横屏右侧悬浮岛卡片 / 竖屏底部弹出 Sheet，
  * 点空白/返回键关闭、遥控器焦点、safeInsets）；本组件只负责内容：
- * - 多集剧集：顶部多线路选择（多于1条线路时展示）+ 下方剧集网格；
+ * - 多集剧集：顶部多线路选择（多于1条线路时展示）+ 下方剧集列表；
  * - 单集影片（仅换线路场景）：隐藏单集选集区，直接以网格平铺展示所有可用线路，点选后自动收起。
  */
 @Composable
@@ -59,11 +59,16 @@ fun FullScreenEpisodeDrawer(
     flags: List<Flag> = emptyList(),
     currentFlag: Flag? = null,
     onSelectFlag: (Flag) -> Unit = {},
+    isLandscape: Boolean = LocalConfiguration.current.let { it.screenWidthDp > it.screenHeightDp },
 ) {
     val displayNames = rememberEpisodeDisplayNames(episodes, isCompactEpisodeTitle)
     val hasMultiEpisodes = episodes.size > 1
 
-    PlayerDrawerShell(onDismiss = onClose, modifier = modifier) {
+    PlayerDrawerShell(
+        onDismiss = onClose,
+        isLandscape = isLandscape,
+        modifier = modifier,
+    ) {
         if (hasMultiEpisodes) {
             if (flags.size > 1) {
                 DrawerFlagSection(
@@ -84,7 +89,7 @@ fun FullScreenEpisodeDrawer(
                 onToggleReverse = onToggleSort,
                 onSelectEpisode = onSelectEpisode,
                 horizontalPadding = 0.dp,
-                bottomPadding = 12.dp,
+                bottomPadding = 8.dp,
                 modifier = Modifier.weight(1f),
             )
         } else if (flags.isNotEmpty()) {

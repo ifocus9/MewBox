@@ -35,11 +35,10 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.DeleteOutline
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -170,7 +169,7 @@ fun HistoryScreen(
                             contentAlignment = Alignment.Center,
                         ) {
                             Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
                                 contentDescription = "退出管理",
                                 tint = MaterialTheme.colorScheme.onSurface,
                                 modifier = Modifier.size(20.dp),
@@ -204,7 +203,7 @@ fun HistoryScreen(
                             contentAlignment = Alignment.Center,
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Refresh,
+                                imageVector = Icons.Rounded.Refresh,
                                 contentDescription = "同步豆瓣想看",
                                 modifier = Modifier.size(20.dp),
                                 tint = if (wishState.status == WishStatus.Refreshing) {
@@ -224,7 +223,7 @@ fun HistoryScreen(
                             contentAlignment = Alignment.Center,
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Delete,
+                                imageVector = Icons.Rounded.DeleteOutline,
                                 contentDescription = "清空历史",
                                 modifier = Modifier.size(20.dp),
                                 tint = MaterialTheme.colorScheme.onSurface
@@ -655,7 +654,7 @@ private fun HistoryItemCard(
                     label = "HistoryActionIcon",
                 ) { deleteMode ->
                     Icon(
-                        imageVector = if (deleteMode) Icons.Default.DeleteOutline else Icons.Default.PlayArrow,
+                        imageVector = if (deleteMode) Icons.Rounded.DeleteOutline else Icons.Rounded.PlayArrow,
                         contentDescription = if (deleteMode) "删除" else "播放",
                         tint = MaterialTheme.colorScheme.onPrimaryContainer,
                         modifier = Modifier.size(20.dp),

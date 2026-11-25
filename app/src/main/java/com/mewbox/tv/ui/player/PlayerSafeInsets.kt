@@ -65,20 +65,26 @@ internal fun rememberPlayerSafeInsets(): PlayerSafeInsets {
         )
     }
 
-    // 3. 底部安全区（沉浸式全屏隐藏系统栏后 safeDrawing.bottom 会降为 0，通过 ignoringVisibility / mandatoryGestures 取值）
-    val navBarsIgnoringVisBottom = WindowInsets.navigationBarsIgnoringVisibility.asPaddingValues().calculateBottomPadding()
-    val mandatoryGesturesBottom = WindowInsets.mandatorySystemGestures.asPaddingValues().calculateBottomPadding()
+    // 3. 底部安全区：竖屏避让底部手势/导航条；横屏沉浸式全屏下仅避让可见安全区与物理 Cutout，并保持与进度条下方对称的最小边距
     val safeDrawingBottom = safeDrawingInsets.calculateBottomPadding()
     val cutoutBottom = cutoutInsets.calculateBottomPadding()
-    val baselineBottom = if (isPortrait) 20.dp else 12.dp
-
-    val bottomInset = listOf(
-        navBarsIgnoringVisBottom,
-        mandatoryGesturesBottom,
-        safeDrawingBottom,
-        cutoutBottom,
-        baselineBottom,
-    ).maxOrNull() ?: baselineBottom
+    val bottomInset = if (isPortrait) {
+        val navBarsIgnoringVisBottom = WindowInsets.navigationBarsIgnoringVisibility.asPaddingValues().calculateBottomPadding()
+        val mandatoryGesturesBottom = WindowInsets.mandatorySystemGestures.asPaddingValues().calculateBottomPadding()
+        listOf(
+            navBarsIgnoringVisBottom,
+            mandatoryGesturesBottom,
+            safeDrawingBottom,
+            cutoutBottom,
+            20.dp,
+        ).maxOrNull() ?: 20.dp
+    } else {
+        listOf(
+            safeDrawingBottom,
+            cutoutBottom,
+            10.dp,
+        ).maxOrNull() ?: 10.dp
+    }
 
     return remember(symmetricHorizontal, topInset, bottomInset) {
         PlayerSafeInsets(

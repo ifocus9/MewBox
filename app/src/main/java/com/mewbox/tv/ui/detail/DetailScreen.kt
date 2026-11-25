@@ -11,8 +11,6 @@ import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -23,6 +21,7 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsIgnoringVisibility
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
@@ -30,6 +29,7 @@ import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -40,26 +40,36 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.mewbox.tv.api.tmdb.TmdbClient
 import com.mewbox.tv.ui.components.ErrorState
 import com.mewbox.tv.ui.components.LoadingState
+import com.mewbox.tv.ui.components.LocalTopBarGlassBackdrop
 import com.mewbox.tv.player.PlayerTrack
 import com.mewbox.tv.ui.player.FullScreenEpisodeDrawer
+import com.mewbox.tv.ui.player.PlayerAdaptiveSheetHost
 import com.mewbox.tv.ui.player.PlayerToastPill
 import com.mewbox.tv.ui.player.PlayerWindowEffects
 import com.mewbox.tv.ui.player.PresentationMode
 import com.mewbox.tv.ui.player.VideoPlayerViewport
 import com.mewbox.tv.ui.theme.DynamicTheme
+import com.mewbox.tv.ui.theme.GLASS_BACKDROP_BAND_MARGIN_DP
 import com.mewbox.tv.ui.theme.ImagePalette
+import com.mewbox.tv.ui.theme.LiquidGlassDefaults
 import com.mewbox.tv.ui.theme.MewBoxTheme
 import com.mewbox.tv.ui.theme.PosterSeedMemory
 import kotlinx.coroutines.Dispatchers
@@ -233,43 +243,146 @@ fun DetailScreen(
 
     // ==================== 统一界面容器（AVBox 风格，沉浸式透明状态栏 & 海报动态取色） ====================
     MewBoxTheme(darkTheme = true, colorScheme = dynamicColorScheme) {
-        Box(
-            modifier = modifier
-                .fillMaxSize()
-                .onSizeChanged { slideWidthPx = it.width.toFloat() }
-                .background(Color.Black),
+        val density = LocalDensity.current
+        val topGlassEnabled = LiquidGlassDefaults.Config.controlsEnabled && LiquidGlassDefaults.isSupported
+        val statusBarTop = with(density) { WindowInsets.statusBarsIgnoringVisibility.getTop(this).toDp() }
+        val topBandExtentDp = statusBarTop + 56.dp + GLASS_BACKDROP_BAND_MARGIN_DP.dp
+        val topBackdropOnDraw: ContentDrawScope.() -> Unit = remember {
+            { drawRect(Color.Black); drawContent() }
+        }
+        val topGlassBackdrop = rememberLayerBackdrop(onDraw = topBackdropOnDraw)
+        val topGlassBounds: (Size) -> Rect? = remember(density, topBandExtentDp) {
+            { size ->
+                val extentPx = with(density) { topBandExtentDp.toPx() }
+                Rect(0f, 0f, size.width, extentPx.coerceAtMost(size.height))
+            }
+        }
+
+        CompositionLocalProvider(
+            LocalTopBarGlassBackdrop provides if (topGlassEnabled) topGlassBackdrop else null,
         ) {
-            // 背景虚化海报（始终平铺在最底层，加载期间即可展示海报底图并提取种子色）
-            val currentBackdrop = backdropUrl ?: state.vod?.vodPic
-            PosterBackdrop(
-                pic = currentBackdrop,
-                onImage = { image ->
-                    scope.launch(Dispatchers.Default) {
-                        val seed = ImagePalette.seedOf(image)
-                        if (seed != null) {
-                            PosterSeedMemory.put(currentBackdrop, seed)
-                            if (backdropSeed != seed) {
-                                backdropSeed = seed
+            Box(
+                modifier = modifier
+                    .fillMaxSize()
+                    .onSizeChanged { slideWidthPx = it.width.toFloat() }
+                    .background(Color.Black),
+            ) {
+                // 背景虚化海报与详情内容主体（共享层，供顶部液态玻璃按钮实时采集折射背景）
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .then(
+                            if (topGlassEnabled) {
+                                Modifier.layerBackdrop(
+                                    backdrop = topGlassBackdrop,
+                                    recordBounds = topGlassBounds,
+                                )
+                            } else {
+                                Modifier
+                            },
+                        ),
+                ) {
+                    val currentBackdrop = backdropUrl ?: state.vod?.vodPic
+                    PosterBackdrop(
+                        pic = currentBackdrop,
+                        onImage = { image ->
+                            scope.launch(Dispatchers.Default) {
+                                val seed = ImagePalette.seedOf(image)
+                                if (seed != null) {
+                                    PosterSeedMemory.put(currentBackdrop, seed)
+                                    if (backdropSeed != seed) {
+                                        backdropSeed = seed
+                                    }
+                                }
+                            }
+                        },
+                    )
+
+                    when {
+                        // 1. 全局 Loading 状态：正在获取影片详情或分集信息，统一展示系统级 Loading（对齐 AVBox）
+                        // 顶栏（返回按钮）在拿到影片信息后才展示，加载期仅显示背景海报 + Loading
+                        state.isLoading -> {
+                            LoadingState(text = "")
+                        }
+
+                        // 2. 详情获取失败状态
+                        state.error != null && state.vod?.playFlags.isNullOrEmpty() -> {
+                            ErrorState(
+                                message = state.error ?: "加载失败",
+                                onRetry = { viewModel.retry() },
+                            )
+                        }
+
+                        // 3. 详情就绪：海报详情层
+                        state.vod != null -> {
+                            val vod = requireNotNull(state.vod)
+
+                            // 3.1 海报详情内容主体（带视差负偏移：当 slideProgress 从 0 -> 1 时向左平移 20% 屏幕宽度）
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .offset {
+                                        IntOffset((-slideProgress * slideWidthPx * ContentSlideRatio).toInt(), 0)
+                                    },
+                            ) {
+                                DetailContent(
+                                    vod = vod,
+                                    tmdbDetail = state.tmdbDetail,
+                                    tmdbImageBase = state.tmdbImageBase,
+                                    flags = vod.playFlags,
+                                    currentFlag = state.selectedFlag,
+                                    episodes = state.selectedFlag?.episodes ?: emptyList(),
+                                    currentEpisode = state.selectedEpisode,
+                                    isEpisodeReversed = state.isEpisodeReversed,
+                                    isCompactEpisodeTitle = state.isCompactEpisodeTitle,
+                                    changeSources = state.changeSources,
+                                    isSearchingChangeSources = state.isSearchingChangeSources,
+                                    currentSiteKey = state.currentSite?.key ?: "",
+                                    currentSourceName = state.currentSite?.name ?: "",
+                                    resumeEpisodeText = state.resumeEpisodeText,
+                                    onPlay = {
+                                        if (vod.playFlags.any { it.episodes.isNotEmpty() }) {
+                                            viewModel.startPlayback()
+                                            enterPlayer()
+                                        }
+                                    },
+                                    onToggleReverse = { viewModel.toggleEpisodeSort() },
+                                    onToggleCompact = { viewModel.toggleEpisodeCompact() },
+                                    onSelectEpisode = { ep ->
+                                        viewModel.selectEpisode(ep)
+                                        enterPlayer()
+                                    },
+                                    onSelectFlag = { flag -> viewModel.selectFlag(flag) },
+                                    onSelectSource = { targetVod -> viewModel.changeSource(targetVod, shouldAutoPlay = false) },
+                                    quickBackdrop = state.quickBackdrop,
+                                    quickPoster = state.quickPoster,
+                                    tmdbEpisodesBySeason = state.tmdbEpisodesBySeason,
+                                    isTmdbEpisodeCardEnabled = state.isTmdbEpisodeCardEnabled,
+                                    onToggleTmdbEpisodeCards = { viewModel.toggleTmdbEpisodeCards() },
+                                    onTitleLongClick = { viewModel.triggerChangeSourcesSearch() },
+                                )
+
+                                // TMDB 手动重新匹配弹窗
+                                if (state.showTmdbMatchDialog) {
+                                    TmdbRematchDialog(
+                                        initialKeyword = state.tmdbSearchKeyword,
+                                        results = state.tmdbSearchResults,
+                                        isSearching = state.isSearchingTmdb,
+                                        searchError = state.tmdbSearchError,
+                                        isConfigured = state.isTmdbConfigured,
+                                        imageBase = state.tmdbImageBase,
+                                        onSearch = { viewModel.searchTmdb(it) },
+                                        onSelect = { viewModel.applyTmdbMatch(it) },
+                                        onDismiss = { viewModel.closeTmdbMatchDialog() },
+                                    )
+                                }
                             }
                         }
                     }
-                },
-            )
-
-            when {
-                // 1. 全局 Loading 状态：正在获取影片详情或分集信息，统一展示系统级 Loading（对齐 AVBox）
-                // 顶栏（返回按钮）在拿到影片信息后才展示，加载期仅显示背景海报 + Loading
-                state.isLoading -> {
-                    LoadingState(text = "")
                 }
 
-                // 2. 详情获取失败状态
-                state.error != null && state.vod?.playFlags.isNullOrEmpty() -> {
-                    ErrorState(
-                        message = state.error ?: "加载失败",
-                        onRetry = { viewModel.retry() },
-                    )
-
+                // 2.2 详情获取失败状态顶部工具栏（置于 layerBackdrop 之外，确保可采集下方海报背景）
+                if (!state.isLoading && state.error != null && state.vod?.playFlags.isNullOrEmpty()) {
                     DetailTopScrim(modifier = Modifier.align(Alignment.TopCenter))
                     DetailTopBar(
                         onBack = onBack,
@@ -277,73 +390,9 @@ fun DetailScreen(
                     )
                 }
 
-                // 3. 详情就绪：海报详情层与全屏播放器层同级叠加（支持 300ms 视差滑入/滑出转场）
-                state.vod != null -> {
+                // 3.2 顶部渐变遮罩与固定顶部工具栏（信息加载完成后 300ms 淡入；随转场进度平滑淡出，全屏时彻底不响应点击）
+                if (!state.isLoading && state.vod != null) {
                     val vod = requireNotNull(state.vod)
-
-                    // 3.1 海报详情内容主体（带视差负偏移：当 slideProgress 从 0 -> 1 时向左平移 20% 屏幕宽度）
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .offset {
-                                IntOffset((-slideProgress * slideWidthPx * ContentSlideRatio).toInt(), 0)
-                            },
-                    ) {
-                        DetailContent(
-                            vod = vod,
-                            tmdbDetail = state.tmdbDetail,
-                            tmdbImageBase = state.tmdbImageBase,
-                            flags = vod.playFlags,
-                            currentFlag = state.selectedFlag,
-                            episodes = state.selectedFlag?.episodes ?: emptyList(),
-                            currentEpisode = state.selectedEpisode,
-                            isEpisodeReversed = state.isEpisodeReversed,
-                            isCompactEpisodeTitle = state.isCompactEpisodeTitle,
-                            changeSources = state.changeSources,
-                            isSearchingChangeSources = state.isSearchingChangeSources,
-                            currentSiteKey = state.currentSite?.key ?: "",
-                            currentSourceName = state.currentSite?.name ?: "",
-                            resumeEpisodeText = state.resumeEpisodeText,
-                            playUrls = state.playUrls,
-                            selectedPlayUrl = state.selectedPlayUrl,
-                            isResolvingPlay = state.isResolvingPlay,
-                            onPlay = {
-                                if (vod.playFlags.any { it.episodes.isNotEmpty() }) {
-                                    viewModel.startPlayback()
-                                    enterPlayer()
-                                }
-                            },
-                            onToggleReverse = { viewModel.toggleEpisodeSort() },
-                            onToggleCompact = { viewModel.toggleEpisodeCompact() },
-                            onSelectEpisode = { ep ->
-                                viewModel.selectEpisode(ep)
-                                enterPlayer()
-                            },
-                            onSelectFlag = { flag -> viewModel.selectFlag(flag) },
-                            onSelectPlayUrl = { playUrl -> viewModel.selectPlayUrl(playUrl) },
-                            onSelectSource = { targetVod -> viewModel.changeSource(targetVod, shouldAutoPlay = false) },
-                            quickBackdrop = state.quickBackdrop,
-                            quickPoster = state.quickPoster,
-                            onTitleLongClick = { viewModel.triggerChangeSourcesSearch() },
-                        )
-
-                        // TMDB 手动重新匹配弹窗
-                        if (state.showTmdbMatchDialog) {
-                            TmdbRematchDialog(
-                                initialKeyword = state.tmdbSearchKeyword,
-                                results = state.tmdbSearchResults,
-                                isSearching = state.isSearchingTmdb,
-                                searchError = state.tmdbSearchError,
-                                isConfigured = state.isTmdbConfigured,
-                                imageBase = state.tmdbImageBase,
-                                onSearch = { viewModel.searchTmdb(it) },
-                                onSelect = { viewModel.applyTmdbMatch(it) },
-                                onDismiss = { viewModel.closeTmdbMatchDialog() },
-                            )
-                        }
-                    }
-
-                    // 3.2 顶部渐变遮罩与固定顶部工具栏（信息加载完成后 300ms 淡入；随转场进度平滑淡出，全屏时彻底不响应点击）
                     val topBarAlpha = (1f - slideProgress).coerceIn(0f, 1f)
                     val topBarVisible = topBarAlpha > 0f
                     // 初始为不可见 + 目标置 true：保证首次进入就绪态时播放淡入动画
@@ -409,11 +458,9 @@ fun DetailScreen(
                                 modifier = Modifier.fillMaxSize(),
                             )
 
-                            // 全屏侧滑选集抽屉
-                            AnimatedVisibility(
+                            // 全屏自适应选集抽屉（横屏右侧悬浮岛 / 竖屏底部 Sheet）
+                            PlayerAdaptiveSheetHost(
                                 visible = showFullscreenEpisodeDrawer,
-                                enter = slideInHorizontally(initialOffsetX = { it }),
-                                exit = slideOutHorizontally(targetOffsetX = { it }),
                                 modifier = Modifier.fillMaxSize(),
                             ) {
                                 FullScreenEpisodeDrawer(
@@ -451,17 +498,17 @@ fun DetailScreen(
                         )
                     }
                 }
-            }
 
-            // Snackbar 提示宿主（底部导航条安全区对齐）
-            SnackbarHost(
-                hostState = snackbarHostState,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .windowInsetsPadding(WindowInsets.navigationBars)
-                    .padding(bottom = if (presentation.isFullscreen) 76.dp else 16.dp),
-            ) { data ->
-                PlayerToastPill(message = data.visuals.message)
+                // Snackbar 提示宿主（底部导航条安全区对齐）
+                SnackbarHost(
+                    hostState = snackbarHostState,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .windowInsetsPadding(WindowInsets.navigationBars)
+                        .padding(bottom = if (presentation.isFullscreen) 96.dp else 16.dp),
+                ) { data ->
+                    PlayerToastPill(message = data.visuals.message)
+                }
             }
         }
     }

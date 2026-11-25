@@ -2,13 +2,19 @@ package com.mewbox.tv.ui.detail
 
 import com.mewbox.tv.api.tmdb.TmdbCache
 import com.mewbox.tv.api.tmdb.TmdbClient
+import com.mewbox.tv.api.tmdb.TmdbHttpException
 import com.mewbox.tv.api.tmdb.TmdbRepository
 import com.mewbox.tv.api.tmdb.bean.TmdbDetail
+import com.mewbox.tv.api.tmdb.bean.TmdbEpisode
 import com.mewbox.tv.api.tmdb.bean.TmdbMedia
+import com.mewbox.tv.api.tmdb.bean.TmdbSeasonDetail
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import timber.log.Timber
@@ -58,6 +64,19 @@ class DetailTmdbCoordinator @Inject constructor(
             if (cached != null) {
                 Timber.i("TMDB 缓存命中: $cleaned")
                 onLoaded(cached, config.imageBase)
+                // 兼容旧版磁盘手动修正缓存：若缺少 seasons 元数据，后台静默补拉一次以支持分集匹配
+                if (cached.mediaType == "tv" && cached.seasons.isEmpty() && cached.id > 0) {
+                    val fresh = tmdbClient.fetchDetail("tv", cached.id).getOrNull()
+                    if (fresh != null && fresh.id > 0 && fresh.seasons.isNotEmpty()) {
+                        if (tmdbCache.hasManualOverride(cleaned)) {
+                            tmdbCache.putManualOverride(cleaned, fresh)
+                        } else {
+                            tmdbCache.putDetailByTitle(cleaned, fresh)
+                            tmdbCache.putDetail(fresh.mediaType, fresh.id, fresh)
+                        }
+                        onLoaded(fresh, config.imageBase)
+                    }
+                }
                 return@launch
             }
 
@@ -137,6 +156,89 @@ class DetailTmdbCoordinator @Inject constructor(
             Timber.w(e, "获取 TMDB 增强信息失败: $vodName")
         } finally {
             Timber.i("TMDB 协程结束: $vodName")
+        }
+    }
+
+    /**
+     * 并发拉取指定季的分集详情（优先读取内存缓存，未命中季并发请求并回填缓存）。
+     */
+    fun loadSeasonEpisodes(
+        scope: CoroutineScope,
+        tmdbDetail: TmdbDetail,
+        seasonNumbers: List<Int>,
+        onLoaded: (Map<Int, List<TmdbEpisode>>) -> Unit,
+    ): Job = scope.launch {
+        if (tmdbDetail.mediaType != "tv" || tmdbDetail.id <= 0 || seasonNumbers.isEmpty()) {
+            return@launch
+        }
+        try {
+            val config = tmdbRepository.getTmdbConfig()
+            if (!config.enable || config.apiKey.isBlank()) {
+                return@launch
+            }
+
+            val merged = linkedMapOf<Int, List<TmdbEpisode>>()
+            val missing = mutableListOf<Int>()
+            for (season in seasonNumbers.distinct()) {
+                val cached = tmdbCache.getSeason(tmdbDetail.id, season)
+                if (cached != null) {
+                    merged[season] = cached.episodes
+                } else {
+                    missing.add(season)
+                }
+            }
+
+            if (missing.isNotEmpty()) {
+                val fetched = coroutineScope {
+                    missing.map { season ->
+                        async {
+                            val result = runCatching {
+                                withTimeout(SEARCH_TIMEOUT_MS) {
+                                    tmdbClient.fetchSeason(tmdbDetail.id, season)
+                                }
+                            }.getOrElse { e ->
+                                when (e) {
+                                    is TimeoutCancellationException -> {
+                                        Timber.w("TMDB fetchSeason 超时(${SEARCH_TIMEOUT_MS}ms): tvId=${tmdbDetail.id}, season=$season")
+                                        Result.failure(e)
+                                    }
+                                    is CancellationException -> throw e
+                                    else -> {
+                                        Timber.w(e, "TMDB fetchSeason 异常: tvId=${tmdbDetail.id}, season=$season")
+                                        Result.failure(e)
+                                    }
+                                }
+                            }
+                            season to result
+                        }
+                    }.awaitAll()
+                }
+                for ((season, result) in fetched) {
+                    val detail = result.getOrNull()
+                    if (detail != null) {
+                        tmdbCache.putSeason(tmdbDetail.id, season, detail)
+                        merged[season] = detail.episodes
+                    } else {
+                        val err = result.exceptionOrNull()
+                        if (err is TmdbHttpException && err.statusCode == 404) {
+                            // 404 代表 TMDB 明确不存在该季，写入空缓存避免重复无效请求
+                            val emptySeason = TmdbSeasonDetail(seasonNumber = season, episodes = emptyList())
+                            tmdbCache.putSeason(tmdbDetail.id, season, emptySeason)
+                            merged[season] = emptyList()
+                        } else if (err != null && err !is TimeoutCancellationException) {
+                            Timber.w("TMDB fetchSeason 失败: tvId=${tmdbDetail.id}, season=$season, msg=${err.message}")
+                        }
+                    }
+                }
+            }
+
+            if (merged.isNotEmpty()) {
+                onLoaded(merged)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.w(e, "加载 TMDB 分集元数据失败: tvId=${tmdbDetail.id}")
         }
     }
 

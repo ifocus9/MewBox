@@ -18,7 +18,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
@@ -159,7 +159,7 @@ fun SubscriptionHistoryDialog(
                                         modifier = Modifier.size(32.dp),
                                     ) {
                                         Icon(
-                                            imageVector = Icons.Default.DeleteOutline,
+                                            imageVector = Icons.Rounded.DeleteOutline,
                                             contentDescription = "删除订阅",
                                             modifier = Modifier.size(18.dp),
                                             tint = OverlayTokens.TextSecondary,

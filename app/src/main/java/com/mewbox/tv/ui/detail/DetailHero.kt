@@ -30,11 +30,11 @@ import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.FindReplace
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.PlayDisabled
+import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -73,6 +73,7 @@ import com.mewbox.tv.api.tmdb.TmdbClient
 import com.mewbox.tv.api.tmdb.bean.TmdbDetail
 import com.mewbox.tv.bean.Vod
 import com.mewbox.tv.ui.components.PosterPlaceholder
+import com.mewbox.tv.ui.components.glassTopBarSurface
 import kotlinx.coroutines.delay
 import java.util.Locale
 import kotlin.math.abs
@@ -96,7 +97,6 @@ private val HeroDescriptionSpacing = 14.dp
 private const val HeroDescriptionAlpha = 0.82f
 private const val HeroDescriptionCollapsedLines = 3
 private const val MetaSeparator = " · "
-private val TypeSeparators = Regex("[,，、/|;；\\s]+")
 
 private val DetailHeroFadeStops = arrayOf(
     0.75f to 0.05f,
@@ -159,6 +159,8 @@ internal fun DetailScrollTopScrim(
     )
 }
 
+private val DetailTopBarIconTint = Color.White.copy(alpha = 0.92f)
+
 /**
  * 固定顶部工具栏：返回按钮与修正匹配按钮
  * 悬浮于详情页内容之上，页面滚动时保持固定不跟随滚动
@@ -181,14 +183,15 @@ fun DetailTopBar(
         Box(
             modifier = Modifier
                 .size(40.dp)
-                .detailGlass(CircleShape)
+                .glassTopBarSurface(CircleShape, forceDark = true)
+                .clip(CircleShape)
                 .clickable(onClick = onBack),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
                 contentDescription = "返回",
-                tint = MaterialTheme.colorScheme.onSurface,
+                tint = DetailTopBarIconTint,
                 modifier = Modifier.size(22.dp),
             )
         }
@@ -198,14 +201,15 @@ fun DetailTopBar(
             Box(
                 modifier = Modifier
                     .size(40.dp)
-                    .detailGlass(CircleShape)
+                    .glassTopBarSurface(CircleShape, forceDark = true)
+                    .clip(CircleShape)
                     .clickable(onClick = onEditTmdb),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    imageVector = Icons.Default.Edit,
+                    imageVector = Icons.Rounded.FindReplace,
                     contentDescription = "修正匹配",
-                    tint = MaterialTheme.colorScheme.onSurface,
+                    tint = DetailTopBarIconTint,
                     modifier = Modifier.size(20.dp),
                 )
             }
@@ -279,7 +283,7 @@ internal fun DetailHeroPosterLayer(
 /**
  * 大海报 Hero 前景内容（位于 LazyColumn 首项，与底层 [DetailHeroPosterLayer] 解耦联动）
  * - 顶部透明区域承接水平轮播手势并在底部居中展示 TMDB Logo 或片名
- * - ⭐ 评分 + 年份 · 地区 · 分类 · 备注
+ * - ⭐ 评分 + 备注 · 年份 · 地区
  * - 可折叠简介
  * - 播放胶囊大按钮
  */
@@ -303,16 +307,11 @@ fun DetailHero(
         ?.takeIf { it > 0.0 }
         ?.let { String.format(Locale.US, "%.1f", it) }
 
-    // 元数据行 (年份 · 地区 · 分类 · 备注)
-    val rawTypes = tmdbDetail?.genres?.map { it.name }?.takeIf { it.isNotEmpty() }
-        ?: vod.typeName.split(TypeSeparators).filter { it.isNotBlank() }
-    val types = rawTypes.joinToString(MetaSeparator)
-
+    // 元数据行 (备注 · 年份 · 地区)
     val metaTail = listOfNotNull(
         vod.vodRemarks.trim().takeIf { it.isNotEmpty() },
         vod.vodYear.takeIf { it.isNotEmpty() && it != "0" } ?: tmdbDetail?.year?.takeIf { it.isNotEmpty() },
         vod.vodArea.takeIf { it.isNotEmpty() },
-        types.takeIf { it.isNotEmpty() },
     ).joinToString(MetaSeparator)
 
     // 简介信息
@@ -630,7 +629,7 @@ private fun DetailHeroInfoBlock(
             ) {
                 if (ratingText != null) {
                     Icon(
-                        imageVector = Icons.Default.Star,
+                        imageVector = Icons.Rounded.Star,
                         contentDescription = null,
                         tint = HeroRatingStarColor,
                         modifier = Modifier.size(HeroRatingIconSize),
@@ -671,8 +670,11 @@ private fun DetailHeroInfoBlock(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = HeroDescriptionSpacing)
-                    .clip(RoundedCornerShape(8.dp))
-                    .clickable(onClick = onToggleDescription),
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = onToggleDescription,
+                    ),
             )
         }
 
@@ -693,7 +695,7 @@ private fun DetailHeroInfoBlock(
                 ),
             ) {
                 Icon(
-                    imageVector = Icons.Default.PlayArrow,
+                    imageVector = Icons.Rounded.PlayArrow,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onPrimary,
                     modifier = Modifier.size(24.dp),
@@ -713,13 +715,14 @@ private fun DetailHeroInfoBlock(
                     .padding(top = 18.dp)
                     .widthIn(min = HeroPlayCapsuleMinWidth)
                     .height(HeroPlayCapsuleHeight)
-                    .detailGlass(RoundedCornerShape(26.dp))
+                    .clip(RoundedCornerShape(26.dp))
+                    .background(detailCardColor())
                     .padding(horizontal = HeroPlayCapsuleHorizontalPadding),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center,
             ) {
                 Icon(
-                    imageVector = Icons.Outlined.Info,
+                    imageVector = Icons.Rounded.PlayDisabled,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(20.dp),

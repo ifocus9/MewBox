@@ -12,8 +12,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Movie
-import androidx.compose.material.icons.outlined.Theaters
+import androidx.compose.material.icons.rounded.Movie
+import androidx.compose.material.icons.rounded.Theaters
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -122,7 +122,7 @@ private fun CardPosterPlaceholder(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    imageVector = Icons.Outlined.Movie,
+                    imageVector = Icons.Rounded.Movie,
                     contentDescription = null,
                     tint = Color.White.copy(alpha = 0.65f),
                     modifier = Modifier.size(20.dp),
@@ -187,7 +187,7 @@ private fun HeroPosterPlaceholder(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    imageVector = Icons.Outlined.Theaters,
+                    imageVector = Icons.Rounded.Theaters,
                     contentDescription = null,
                     tint = Color.White.copy(alpha = 0.60f),
                     modifier = Modifier.size(32.dp),

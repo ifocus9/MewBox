@@ -1,9 +1,6 @@
 package com.mewbox.tv.ui.detail
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
@@ -29,6 +26,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mewbox.tv.bean.Vod
 import com.mewbox.tv.player.PlayerTrack
 import com.mewbox.tv.ui.player.FullScreenEpisodeDrawer
+import com.mewbox.tv.ui.player.PlayerAdaptiveSheetHost
 import com.mewbox.tv.ui.player.PlayerToastPill
 import com.mewbox.tv.ui.player.PlayerWindowEffects
 import com.mewbox.tv.ui.player.VideoPlayerViewport
@@ -154,11 +152,9 @@ fun DirectPlayScreen(
                 modifier = Modifier.fillMaxSize(),
             )
 
-            // 全屏侧滑选集抽屉
-            AnimatedVisibility(
+            // 全屏自适应选集抽屉（横屏右侧悬浮岛 / 竖屏底部 Sheet）
+            PlayerAdaptiveSheetHost(
                 visible = showFullscreenEpisodeDrawer,
-                enter = slideInHorizontally(initialOffsetX = { it }),
-                exit = slideOutHorizontally(targetOffsetX = { it }),
                 modifier = Modifier.fillMaxSize(),
             ) {
                 FullScreenEpisodeDrawer(
@@ -193,7 +189,7 @@ fun DirectPlayScreen(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .windowInsetsPadding(WindowInsets.navigationBars)
-                    .padding(bottom = 76.dp),
+                    .padding(bottom = 96.dp),
             ) { data ->
                 PlayerToastPill(message = data.visuals.message)
             }

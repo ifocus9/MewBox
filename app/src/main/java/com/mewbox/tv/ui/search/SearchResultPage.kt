@@ -23,10 +23,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.GridView
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.ViewAgenda
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.GridView
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.ViewAgenda
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -112,7 +112,7 @@ fun SearchResultPage(
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
                         contentDescription = "返回搜索",
                         tint = onSurface,
                         modifier = Modifier.size(22.dp),
@@ -136,7 +136,7 @@ fun SearchResultPage(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Search,
+                        imageVector = Icons.Rounded.Search,
                         contentDescription = "重新编辑",
                         tint = onSurfaceVariant,
                         modifier = Modifier.size(18.dp),
@@ -167,7 +167,7 @@ fun SearchResultPage(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    imageVector = if (state.isDoubleColumn) Icons.Default.ViewAgenda else Icons.Default.GridView,
+                    imageVector = if (state.isDoubleColumn) Icons.Rounded.ViewAgenda else Icons.Rounded.GridView,
                     contentDescription = "切换单双列",
                     tint = onSurface,
                     modifier = Modifier.size(20.dp),

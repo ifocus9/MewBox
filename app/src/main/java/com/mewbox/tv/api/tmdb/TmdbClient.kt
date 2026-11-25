@@ -3,20 +3,34 @@ package com.mewbox.tv.api.tmdb
 import com.mewbox.tv.api.tmdb.bean.TmdbDetail
 import com.mewbox.tv.api.tmdb.bean.TmdbMedia
 import com.mewbox.tv.api.tmdb.bean.TmdbResult
+import com.mewbox.tv.api.tmdb.bean.TmdbSeasonDetail
 import com.mewbox.tv.bean.TmdbConfig
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import java.io.IOException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+
+/** TMDB 接口非 2xx HTTP 状态异常，便于区分 404（资源不存在）与瞬态网络故障。 */
+class TmdbHttpException(
+    val statusCode: Int,
+    message: String,
+) : IOException(message)
 
 /**
  * TMDB API 客户端
@@ -185,6 +199,62 @@ class TmdbClient @Inject constructor(
         }
     }
 
+    /**
+     * 查询剧集单季分集详情（用于选集剧照与单集标题）
+     */
+    suspend fun fetchSeason(tvId: Int, seasonNumber: Int): Result<TmdbSeasonDetail> = withContext(Dispatchers.IO) {
+        if (tvId <= 0) {
+            return@withContext Result.failure(IllegalArgumentException("TMDB TV ID 无效"))
+        }
+        val config = repository.getTmdbConfig()
+        if (!config.enable || config.apiKey.isBlank()) {
+            return@withContext Result.failure(IllegalStateException("TMDB 未开启或未配置 API Key"))
+        }
+        val base = normalizeApiBase(config.apiBase)
+        val parsed = "$base/3/tv/$tvId/season/$seasonNumber".toHttpUrlOrNull()
+            ?: return@withContext Result.failure(IllegalArgumentException("TMDB API 基础地址格式无效"))
+
+        val urlBuilder = parsed.newBuilder()
+            .addQueryParameter("language", "zh-CN")
+        val requestBuilder = Request.Builder()
+        applyAuth(requestBuilder, urlBuilder, config.apiKey)
+        requestBuilder.url(urlBuilder.build())
+
+        try {
+            executeCancellable(requestBuilder.build()).use { response ->
+                val body = response.body?.string().orEmpty()
+                if (!response.isSuccessful) {
+                    return@withContext Result.failure(TmdbHttpException(response.code, "HTTP ${response.code}: $body"))
+                }
+                val season = json.decodeFromString<TmdbSeasonDetail>(body)
+                Result.success(season)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    private suspend fun executeCancellable(request: Request): Response =
+        suspendCancellableCoroutine { cont ->
+            val call = client.newCall(request)
+            cont.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    if (cont.isActive) cont.resumeWithException(e)
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    if (!cont.isActive) {
+                        response.close()
+                        return
+                    }
+                    cont.resume(response)
+                }
+            })
+        }
+
     companion object {
         const val DEFAULT_API_BASE = "https://api.tmdb.org"
         const val DEFAULT_IMAGE_BASE = "https://image.tmdb.org/t/p"
@@ -237,6 +307,11 @@ class TmdbClient @Inject constructor(
             if (path.isNullOrEmpty()) return ""
             return "${normalizeImageBase(base)}/$size$path"
         }
+
+        /**
+         * 拼装剧照完整 URL（TMDB still_sizes 规范为 w92/w185/w300/original，不含 w500）
+         */
+        fun stillUrl(base: String? = null, path: String?): String = imageUrl(base, path, "w300")
 
         /**
          * 若图片使用官方默认域名且遇到加载失败，获取备用官方 CDN 域名进行容错重试；

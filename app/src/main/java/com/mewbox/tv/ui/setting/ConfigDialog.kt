@@ -25,8 +25,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -148,7 +148,7 @@ fun ConfigDialog(
                                 modifier = Modifier.size(32.dp),
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.Clear,
+                                    imageVector = Icons.Rounded.Close,
                                     contentDescription = "清除名称",
                                     tint = OverlayTokens.TextSecondary,
                                     modifier = Modifier.size(17.dp),
@@ -193,7 +193,7 @@ fun ConfigDialog(
                                 modifier = Modifier.size(32.dp),
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.Clear,
+                                    imageVector = Icons.Rounded.Close,
                                     contentDescription = "清除地址",
                                     tint = OverlayTokens.TextSecondary,
                                     modifier = Modifier.size(17.dp),
@@ -205,7 +205,7 @@ fun ConfigDialog(
                             modifier = Modifier.size(34.dp),
                         ) {
                             Icon(
-                                imageVector = Icons.Default.FolderOpen,
+                                imageVector = Icons.Rounded.FolderOpen,
                                 contentDescription = "选择本地文件",
                                 tint = OverlayTokens.TextSecondary,
                                 modifier = Modifier.size(20.dp),

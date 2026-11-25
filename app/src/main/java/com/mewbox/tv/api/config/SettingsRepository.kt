@@ -43,6 +43,9 @@ class SettingsRepository internal constructor(
     /** 选集「精简」开关：全局记忆，详情页抽屉与全屏选集面板共用（对齐 MewPlayer）。 */
     private val compactEpisodeKey = booleanPreferencesKey("compact_episode_title")
 
+    /** 详情页 TMDB 剧照选集卡片（✨ 开关）：全局记忆，默认开启。 */
+    private val tmdbEpisodeCardsKey = booleanPreferencesKey("tmdb_episode_cards")
+
     private val json = Json { ignoreUnknownKeys = true }
 
     @Volatile
@@ -64,6 +67,7 @@ class SettingsRepository internal constructor(
     val themeModeFlow: Flow<ThemeMode> = store.data.map { ThemeMode.fromStorage(it[themeModeKey]) }
     val themeColorArgbFlow: Flow<Int> = store.data.map { ThemeColor.fromStorage(it[themeColorKey]) }
     val compactEpisodeTitleFlow: Flow<Boolean> = store.data.map { it[compactEpisodeKey] ?: false }
+    val tmdbEpisodeCardsFlow: Flow<Boolean> = store.data.map { it[tmdbEpisodeCardsKey] ?: true }
     val searchHistoryFlow: Flow<List<String>> = store.data.map { prefs ->
         parseSearchHistory(prefs[searchHistoryKey].orEmpty())
     }
@@ -71,6 +75,11 @@ class SettingsRepository internal constructor(
     /** 首次渲染前同步读取一次，避免抽屉打开瞬间按钮状态闪一下。 */
     @Volatile
     var compactEpisodeTitle: Boolean = false
+        private set
+
+    /** 首次渲染前同步读取一次，避免详情页加载时卡片形态闪烁。 */
+    @Volatile
+    var tmdbEpisodeCards: Boolean = true
         private set
 
     @Volatile
@@ -95,6 +104,7 @@ class SettingsRepository internal constructor(
         currentConfigUrl = prefs[configUrlKey].orEmpty()
         currentConfigId = prefs[configIdKey].orEmpty()
         compactEpisodeTitle = prefs[compactEpisodeKey] ?: false
+        tmdbEpisodeCards = prefs[tmdbEpisodeCardsKey] ?: true
         currentThemeMode = ThemeMode.fromStorage(prefs[themeModeKey])
         currentThemeColorArgb = ThemeColor.fromStorage(prefs[themeColorKey])
         searchHistory = parseSearchHistory(prefs[searchHistoryKey].orEmpty())
@@ -138,6 +148,11 @@ class SettingsRepository internal constructor(
     suspend fun setCompactEpisodeTitle(value: Boolean) {
         compactEpisodeTitle = value
         store.edit { it[compactEpisodeKey] = value }
+    }
+
+    suspend fun setTmdbEpisodeCards(value: Boolean) {
+        tmdbEpisodeCards = value
+        store.edit { it[tmdbEpisodeCardsKey] = value }
     }
 
     /** 保存豆瓣个人 uid（传入值应为 normalizeDoubanUid 归一化后的纯数字）。 */

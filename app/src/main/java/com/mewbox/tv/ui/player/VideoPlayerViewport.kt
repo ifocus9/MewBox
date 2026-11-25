@@ -9,49 +9,55 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.SubtitleView
-import coil3.compose.AsyncImage
 import com.mewbox.tv.bean.PlayUrl
 import com.mewbox.tv.bean.Vod
 import com.mewbox.tv.player.PlaybackState
 import com.mewbox.tv.player.PlayerState
 import com.mewbox.tv.player.PlayerTrack
 import com.mewbox.tv.player.Players
-import com.mewbox.tv.util.AppToast
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import timber.log.Timber
 
 private const val CONTROLS_AUTO_HIDE_DELAY_MS = 4500L
+private const val ZOOM_HINT_HIDE_DELAY_MS = 2500L
 private const val GESTURE_SEEK_FULL_SWIPE_MS = 90_000L
 
 /** 长按屏幕时的临时倍速 */
@@ -62,10 +68,7 @@ private const val DEFAULT_ZOOM_SCALE = 1f
 private const val MIN_ZOOM_SCALE = 0.75f
 private const val MAX_ZOOM_SCALE = 4f
 
-/**
- * 字幕下移的安全边界：字幕文字底边最多到「屏幕底部 − 此值」，超过就不再继续下移。
- * 调大 → 字幕更靠上、最大下移量更小；调小 → 允许更贴底。只在横屏缩放时有意义。
- */
+/** 字幕下移的安全边界：字幕文字底边最多到「屏幕底部 − 此值」，超过就不再继续下移 */
 private const val SUBTITLE_BOTTOM_SAFE_MARGIN_DP = 12f
 
 /** Media3 SubtitleView 默认底部内边距 0.08f（javap 验证），文字底边约在 View 高度的 92% 处 */
@@ -74,12 +77,14 @@ private const val SUBTITLE_TEXT_BOTTOM_FRACTION = 0.92f
 /** 手势亮度下限：避免把背光压到 0 导致整屏全黑 */
 private const val MIN_GESTURE_BRIGHTNESS = 0.01f
 
-/**
- * 读取当前系统亮度并归一化到 0..1，作为亮度手势的起步基准。
- *
- * 自动亮度开启时系统仍会把实时生效值写回 SCREEN_BRIGHTNESS，因此这里拿到的是用户当下
- * 真正看到的亮度，而不是写死的 0.5f —— 后者会让首次滑动的瞬间亮度跳一大截。
- */
+private enum class PlayerSheet {
+    NONE,
+    SPEED,
+    QUALITY,
+    TRACKS,
+    MORE,
+}
+
 private fun readSystemBrightness(context: Context): Float = try {
     val raw = Settings.System.getInt(
         context.contentResolver,
@@ -88,15 +93,10 @@ private fun readSystemBrightness(context: Context): Float = try {
     )
     (raw.coerceIn(0, 255) / 255f).coerceIn(MIN_GESTURE_BRIGHTNESS, 1f)
 } catch (e: Exception) {
+    Timber.w(e, "读取系统亮度失败，回退默认 0.5")
     0.5f
 }
 
-/**
- * 把 Window 级 screenBrightness 还原成「跟随系统」。
- *
- * 这个 override 只要留在 LayoutParams 里，窗口每次重新获得焦点（切回前台、收起通知栏、
- * 解锁）都会被 WindowManager 重新 apply 一次，亮度会瞬间跳到上次手势设定的值。
- */
 private fun resetWindowBrightness(activity: Activity?) {
     val window = activity?.window ?: return
     val lp = window.attributes
@@ -107,8 +107,8 @@ private fun resetWindowBrightness(activity: Activity?) {
 }
 
 /**
- * 完整视频播放视窗组件
- * 沉浸式视窗 + 手势调节 HUD + 控制栏 + 全屏操作集
+ * 完整视频播放视窗组件：
+ * 沉浸式视窗 + 手势调节 HUD + 影院级零遮挡控制栏 + 自适应悬浮操作面板
  */
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
@@ -145,17 +145,26 @@ fun VideoPlayerViewport(
 ) {
     val context = LocalContext.current
     val activity = context as? Activity
+    val scope = rememberCoroutineScope()
 
-    // 进入播放页默认隐藏所有操作栏与展示信息，单击唤起
     var showControls by remember { mutableStateOf(false) }
     var isLocked by remember { mutableStateOf(false) }
-    var showInfoDialog by remember { mutableStateOf(false) }
-    var showQualityDialog by remember { mutableStateOf(false) }
-    // 轨道抽屉拆成显隐 + 类型两个状态：退出动画期间类型需保活，否则内容被提前移除
-    var showTrackDrawer by remember { mutableStateOf(false) }
-    var trackDrawerType by remember { mutableStateOf(C.TRACK_TYPE_TEXT) }
+    var isProgressBarDragging by remember { mutableStateOf(false) }
+    var controlsInteractionTick by remember { mutableIntStateOf(0) }
+
+    var activeSheet by remember { mutableStateOf(PlayerSheet.NONE) }
+    var lastActiveSheet by remember { mutableStateOf(PlayerSheet.MORE) }
+
+    fun openSheet(sheet: PlayerSheet) {
+        lastActiveSheet = sheet
+        activeSheet = sheet
+        showControls = false
+    }
+
     val hasMultiQuality = playUrls.size > 1 || (playUrls.size == 1 && playUrls.first().name != "默认")
     val currentQualityName = selectedPlayUrl?.name?.takeIf { it.isNotBlank() && it != "默认" } ?: "画质"
+    val showEpisodeControls = hasPrevEpisode || hasNextEpisode
+    val hasMultiFlags = vod.playFlags.size > 1
 
     var isSeekingByGesture by remember { mutableStateOf(false) }
     var gestureSeekTargetMs by remember { mutableLongStateOf(0L) }
@@ -177,22 +186,17 @@ fun VideoPlayerViewport(
         }
     }
 
-    // 亮度手势从「当前真实系统亮度」起步，避免首次滑动就跳到固定的 0.5
     val systemBrightness = remember(context) { readSystemBrightness(context) }
     var isBrightnessAdjusting by remember { mutableStateOf(false) }
     var currentBrightness by remember { mutableFloatStateOf(systemBrightness) }
     var initialBrightness by remember { mutableFloatStateOf(systemBrightness) }
 
-    // screenBrightness 是 Window 级覆盖，只在「播放会话 + 前台」期间有效：
-    // 切到后台立即释放，让其它 app 完全使用系统亮度，回到前台也不会被重新 apply 成旧值；
-    // 退出播放页（组件销毁）时同样还原，否则首页 / 设置页会继承播放时调过的亮度。
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_STOP -> resetWindowBrightness(activity)
                 Lifecycle.Event.ON_START -> {
-                    // override 已释放，HUD 基准同步回真实系统亮度，避免下一次手势仍从旧值起步
                     val brightness = readSystemBrightness(context)
                     currentBrightness = brightness
                     initialBrightness = brightness
@@ -211,21 +215,30 @@ fun VideoPlayerViewport(
     var currentVolumeRatio by remember { mutableFloatStateOf(0.5f) }
     var initialVolumeRatio by remember { mutableFloatStateOf(0.5f) }
 
-    // 长按倍速播放：boost 期间显示提示，松手恢复按下前的倍速
     var isBoostPlaying by remember { mutableStateOf(false) }
     var speedBeforeBoost by remember { mutableFloatStateOf(1f) }
 
-    // 双指缩放：纯播放会话内状态，不落 DataStore、不跨集保持。
-    // 换源 / 换集（播放地址或集名变化）时倍率与手势基准一并复位到 1x，
-    // 避免上一集的放大倍率被带到下一集，也避免手势进行中换集留下脏基准。
     var zoomScale by remember { mutableFloatStateOf(DEFAULT_ZOOM_SCALE) }
     var zoomGestureBase by remember { mutableFloatStateOf(DEFAULT_ZOOM_SCALE) }
+    var zoomInteractionTick by remember { mutableIntStateOf(0) }
+    var showZoomHintAfterPinch by remember { mutableStateOf(false) }
+    var zoomResetJob by remember { mutableStateOf<Job?>(null) }
+
     LaunchedEffect(playerState.playUrl, currentEpisodeName) {
+        zoomResetJob?.cancel()
         zoomScale = DEFAULT_ZOOM_SCALE
         zoomGestureBase = DEFAULT_ZOOM_SCALE
+        showZoomHintAfterPinch = false
     }
 
-    // 组件被回收或离开播放页面时，确保恢复倍速
+    LaunchedEffect(zoomInteractionTick) {
+        if (zoomInteractionTick > 0 && isZoomModified(zoomScale)) {
+            showZoomHintAfterPinch = true
+            delay(ZOOM_HINT_HIDE_DELAY_MS)
+            showZoomHintAfterPinch = false
+        }
+    }
+
     DisposableEffect(Unit) {
         onDispose {
             if (isBoostPlaying) {
@@ -243,15 +256,15 @@ fun VideoPlayerViewport(
     val audioManager = remember(context) { context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager }
     val maxVolume = remember(audioManager) { audioManager?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) ?: 15 }
 
-    // 控制栏自动隐藏定时器（4.5秒）
-    LaunchedEffect(showControls, isLocked) {
-        if (showControls && !isLocked) {
-            delay(CONTROLS_AUTO_HIDE_DELAY_MS)
-            showControls = false
+    // 控制栏与锁屏按钮自动隐藏：拖拽进度条或有交互动作时暂停/重置倒计时
+    LaunchedEffect(showControls, isLocked, isProgressBarDragging, controlsInteractionTick, activeSheet) {
+        if (!showControls || isProgressBarDragging || activeSheet != PlayerSheet.NONE) {
+            return@LaunchedEffect
         }
+        delay(CONTROLS_AUTO_HIDE_DELAY_MS)
+        showControls = false
     }
 
-    // 全屏播放防息屏控制：当正在播放、缓冲或解析源时保持屏幕常亮；暂停或退出全屏时自动解除常亮
     val shouldKeepScreenOn = playerState.isPlaying ||
         playerState.playbackState == PlaybackState.BUFFERING ||
         isResolvingPlay ||
@@ -269,13 +282,17 @@ fun VideoPlayerViewport(
         }
     }
 
+    var viewportIsLandscape by remember { mutableStateOf(true) }
+
     BoxWithConstraints(
         modifier = modifier.background(Color.Black),
         contentAlignment = Alignment.Center,
     ) {
         val isLandscape = maxWidth > maxHeight
+        viewportIsLandscape = isLandscape
+        val insets = rememberPlayerSafeInsets()
 
-        // 1. 底层 PlayerView（禁止使用 Media3 自带控制器，由上方 Compose 层统一绘制交互控制栏）
+        // 1. 底层 PlayerView
         AndroidView(
             factory = { ctx ->
                 PlayerView(ctx).apply {
@@ -289,7 +306,6 @@ fun VideoPlayerViewport(
                     resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                     keepScreenOn = true
 
-                    // 配置字幕样式：白字 + 单字黑色描边 + 背景透明（对齐 MewPlayer，消除整块黑色背景）
                     subtitleView?.apply {
                         setStyle(
                             CaptionStyleCompat(
@@ -299,11 +315,10 @@ fun VideoPlayerViewport(
                                 CaptionStyleCompat.EDGE_TYPE_OUTLINE,
                                 android.graphics.Color.BLACK,
                                 null,
-                            )
+                            ),
                         )
                         setApplyEmbeddedStyles(true)
                         setApplyEmbeddedFontSizes(false)
-                        // 动态字号策略：横屏按高度 5.33% 自适应适配各类屏幕；竖屏使用固定 17sp 避免因高纵横比导致字幕被拉大两倍
                         if (isLandscape) {
                             setFractionalTextSize(SubtitleView.DEFAULT_TEXT_SIZE_FRACTION)
                         } else {
@@ -313,14 +328,11 @@ fun VideoPlayerViewport(
                 }
             },
             update = { pv ->
-                // View 默认 pivot 即 (width/2, height/2)，天然从画面中心缩放；
-                // 变换只作用于最底层 PlayerView，上层 Compose 控制栏 / HUD 不受影响
                 pv.scaleX = zoomScale
                 pv.scaleY = zoomScale
                 pv.resizeMode = playerState.resizeMode
                 pv.keepScreenOn = shouldKeepScreenOn
                 pv.subtitleView?.let { subView ->
-                    // 缩放抵消：pivot 固定在 View 中心，S(s)·S(1/s) = I，字幕字号与水平位置恒定不变
                     val h = subView.height.toFloat()
                     subView.pivotX = subView.width / 2f
                     subView.pivotY = h / 2f
@@ -328,10 +340,6 @@ fun VideoPlayerViewport(
                     subView.scaleX = inverseScale
                     subView.scaleY = inverseScale
 
-                    // 只做垂直位移：理论下移量 (s−1)·h/2，但文字底边不得越过「屏幕底部 − 安全边距」。
-                    // contentFrame 在 pv 内居中，故文字底边原始屏幕 y = (pv.h − h)/2 + 0.92h。
-                    // translation 位于父局部坐标系，经 pv 的 S(s) 后放大为屏幕空间位移，因此要除以 zoomScale。
-                    // 仅对播放器渲染的软字幕有效（烧录硬字幕是画面像素，不受影响）。
                     val safePx = SUBTITLE_BOTTOM_SAFE_MARGIN_DP * subView.resources.displayMetrics.density
                     val windowH = pv.height.toFloat()
                     val textBottom = (windowH - h) / 2f + SUBTITLE_TEXT_BOTTOM_FRACTION * h
@@ -351,7 +359,7 @@ fun VideoPlayerViewport(
             modifier = Modifier.fillMaxSize(),
         )
 
-        // 2. 独立手势捕获层（位于视频和背景海报上方，但在控制栏、HUD 和对话框下方）
+        // 2. 独立手势捕获层
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -361,12 +369,22 @@ fun VideoPlayerViewport(
                         isPlaying = { currentIsPlaying },
                         onSingleTap = {
                             showControls = !showControls
+                            if (showControls) {
+                                controlsInteractionTick++
+                            }
                         },
                         onDoubleTap = {
-                            if (!currentIsLocked) currentOnPlayPauseToggle()
+                            if (!currentIsLocked) {
+                                currentOnPlayPauseToggle()
+                            }
                         },
                         onLongPressStart = {
-                            timber.log.Timber.d("viewport: onLongPressStart called! currentIsLocked=%s, currentIsPlaying=%s, players.isPlaying=%s", currentIsLocked, currentIsPlaying, players.state.value.isPlaying)
+                            Timber.d(
+                                "viewport: onLongPressStart called! currentIsLocked=%s, currentIsPlaying=%s, players.isPlaying=%s",
+                                currentIsLocked,
+                                currentIsPlaying,
+                                players.state.value.isPlaying,
+                            )
                             if (!currentIsLocked && (currentIsPlaying || players.state.value.isPlaying)) {
                                 speedBeforeBoost = players.state.value.speed
                                 isBoostPlaying = true
@@ -445,10 +463,12 @@ fun VideoPlayerViewport(
                             isVolumeAdjusting = false
                         },
                         onZoomStart = {
+                            zoomResetJob?.cancel()
                             zoomGestureBase = zoomScale
                         },
                         onZoomChange = { factor ->
                             zoomScale = (zoomGestureBase * factor).coerceIn(MIN_ZOOM_SCALE, MAX_ZOOM_SCALE)
+                            zoomInteractionTick++
                         },
                     )
                 },
@@ -457,7 +477,7 @@ fun VideoPlayerViewport(
         val isLoading = isResolvingPlay || isAutoSearching || playerState.playbackState == PlaybackState.BUFFERING
         val isError = playerState.playbackState == PlaybackState.ERROR
 
-        // 2. 加载 / 缓冲 / 跨源检索中提示
+        // 3. 加载 / 缓冲提示
         if (isLoading) {
             PlayerLoadingOverlay(
                 isResolvingPlay = isResolvingPlay,
@@ -465,11 +485,6 @@ fun VideoPlayerViewport(
                 autoSearchMessage = autoSearchMessage,
                 networkSpeed = playerState.networkSpeed,
             )
-        }
-
-        // 3. 播放错误提示
-        if (isError) {
-            PlayerErrorOverlay(errorMessage = playerState.errorMessage)
         }
 
         // 4. 手势浮层 HUD（快进快退、亮度、音量、长按倍速）
@@ -485,19 +500,87 @@ fun VideoPlayerViewport(
             boostSpeed = LONG_PRESS_BOOST_SPEED,
         )
 
-        // 5. 屏幕锁定时只显示解锁按钮
+        // 6. 无控制栏滑动快进时的底部极细预览进度条
+        val dur = playerState.duration
+        val gestureSeekProgress = if (dur > 0L) (gestureSeekTargetMs.toFloat() / dur).coerceIn(0f, 1f) else 0f
+        val bufferedProgress = if (dur > 0L) (playerState.bufferedPosition.toFloat() / dur).coerceIn(0f, 1f) else 0f
+        AnimatedVisibility(
+            visible = isSeekingByGesture && !showControls && !isLocked,
+            enter = fadeIn(tween(120)),
+            exit = fadeOut(tween(150)),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(
+                    start = insets.horizontal + 16.dp,
+                    end = insets.horizontal + 16.dp,
+                    bottom = insets.bottom + 14.dp,
+                ),
+        ) {
+            PlayerSeekPreviewStrip(
+                progress = gestureSeekProgress,
+                bufferedProgress = bufferedProgress,
+                openingRatio = if (opening > 0L && dur > 0L) (opening.toFloat() / dur).coerceIn(0f, 1f) else null,
+                endingRatio = if (ending > 0L && dur > 0L) ((dur - ending).coerceAtLeast(0L).toFloat() / dur).coerceIn(0f, 1f) else null,
+            )
+        }
+
+        // 7. 播放错误提示（带直达重新加载与切换线路入口）
+        if (isError) {
+            PlayerErrorOverlay(
+                errorMessage = playerState.errorMessage,
+                onRetry = {
+                    showControls = false
+                    onRefreshPlayback()
+                },
+                onSwitchLine = if (showEpisodeControls || hasMultiFlags) {
+                    {
+                        showControls = false
+                        onOpenEpisodeDrawer()
+                    }
+                } else {
+                    null
+                },
+            )
+        }
+
+        // 8. 屏幕锁定时仅显示解锁按钮
         if (isLocked) {
             PlayerLockedOverlay(
                 visible = showControls,
-                onUnlock = { isLocked = false },
+                onUnlock = {
+                    isLocked = false
+                    controlsInteractionTick++
+                },
             )
             return@BoxWithConstraints
         }
 
-        // 6. 交互控制层（淡入淡出遮罩）
+        // 9. 右侧双指缩放还原胶囊（缩放偏离 1.0x 且控制栏可见或刚缩放结束时出现）
+        PlayerZoomResetPill(
+            visible = isZoomModified(zoomScale) && (showControls || showZoomHintAfterPinch) && activeSheet == PlayerSheet.NONE,
+            zoomScale = zoomScale,
+            onResetZoom = {
+                zoomResetJob?.cancel()
+                zoomResetJob = scope.launch {
+                    val startScale = zoomScale
+                    animate(
+                        initialValue = startScale,
+                        targetValue = DEFAULT_ZOOM_SCALE,
+                        animationSpec = tween(durationMillis = 220),
+                    ) { value, _ ->
+                        zoomScale = value
+                    }
+                    zoomGestureBase = DEFAULT_ZOOM_SCALE
+                    showZoomHintAfterPinch = false
+                }
+                controlsInteractionTick++
+            },
+        )
+
+        // 10. 主交互控制层
         PlayerControlsOverlay(
             visible = showControls,
-            showCenterControls = !isLoading && !isError,
+            showNetworkSpeed = !isLoading && playerState.playbackState == PlaybackState.READY,
             vod = vod,
             playerState = playerState,
             isLandscape = isLandscape,
@@ -506,95 +589,94 @@ fun VideoPlayerViewport(
             hasNextEpisode = hasNextEpisode,
             hasMultiQuality = hasMultiQuality,
             currentQualityName = currentQualityName,
-            onBack = onBack,
-            onShowMediaInfo = { showInfoDialog = true },
-            onPlayPauseToggle = onPlayPauseToggle,
-            onSeekTo = onSeekTo,
-            onPlayPrevious = onPlayPrevious,
-            onPlayNext = onPlayNext,
-            onRefreshPlayback = onRefreshPlayback,
-            onShowSubtitleTracks = { trackDrawerType = C.TRACK_TYPE_TEXT; showTrackDrawer = true },
-            onShowAudioTracks = { trackDrawerType = C.TRACK_TYPE_AUDIO; showTrackDrawer = true },
-            onShowVideoTracks = { trackDrawerType = C.TRACK_TYPE_VIDEO; showTrackDrawer = true },
-            onShowQuality = { showQualityDialog = true },
-            onLockScreen = { isLocked = true },
-            onOpenEpisodeDrawer = onOpenEpisodeDrawer,
             opening = opening,
             ending = ending,
-            onSetOpening = onSetOpening,
-            onResetOpening = onResetOpening,
-            onSetEnding = onSetEnding,
-            onResetEnding = onResetEnding,
             externalSeekPosition = if (isSeekingByGesture) gestureSeekTargetMs else pendingGestureSeekTarget,
-        )
-    }
-
-    // 媒体信息抽屉：与画质/选集/轨道抽屉同款右侧滑入动画
-    AnimatedVisibility(
-        visible = showInfoDialog,
-        enter = slideInHorizontally(initialOffsetX = { it }),
-        exit = slideOutHorizontally(targetOffsetX = { it }),
-        modifier = Modifier.fillMaxSize(),
-    ) {
-        PlayerMediaInfoDialog(
-            vodName = vod.vodName,
-            currentEpisodeName = currentEpisodeName,
-            headers = playerState.headers,
-            playUrl = playerState.playUrl,
-            onDismiss = { showInfoDialog = false },
-        )
-    }
-
-    // 画质抽屉：与选集/轨道抽屉同款右侧滑入动画
-    AnimatedVisibility(
-        visible = showQualityDialog,
-        enter = slideInHorizontally(initialOffsetX = { it }),
-        exit = slideOutHorizontally(targetOffsetX = { it }),
-        modifier = Modifier.fillMaxSize(),
-    ) {
-        QualitySelectionDialog(
-            playUrls = playUrls,
-            selectedPlayUrl = selectedPlayUrl,
-            onSelectPlayUrl = onSelectPlayUrl,
-            onDismiss = { showQualityDialog = false },
-        )
-    }
-
-    // 轨道抽屉：与选集抽屉同款右侧滑入动画；退出期间 trackDrawerType 保活
-    AnimatedVisibility(
-        visible = showTrackDrawer,
-        enter = slideInHorizontally(initialOffsetX = { it }),
-        exit = slideOutHorizontally(targetOffsetX = { it }),
-        modifier = Modifier.fillMaxSize(),
-    ) {
-        val type = trackDrawerType
-        val tracks = when (type) {
-            C.TRACK_TYPE_TEXT -> playerState.subtitleTracks
-            C.TRACK_TYPE_AUDIO -> playerState.audioTracks
-            C.TRACK_TYPE_VIDEO -> playerState.videoTracks
-            else -> emptyList()
-        }
-        TrackSelectionDialog(
-            type = type,
-            tracks = tracks,
-            isTypeDisabled = if (type == C.TRACK_TYPE_TEXT) playerState.isSubtitleDisabled else false,
-            onSelectTrack = { track ->
-                if (!track.isSupported) {
-                    AppToast.show("当前设备暂不支持该音轨解码 (${track.name})")
-                    return@TrackSelectionDialog
+            onBack = onBack,
+            onPlayPauseToggle = onPlayPauseToggle,
+            onSeekTo = onSeekTo,
+            onSeekBy = { players.seekBy(it) },
+            onPlayPrevious = onPlayPrevious,
+            onPlayNext = onPlayNext,
+            onLockScreen = {
+                isLocked = true
+                showControls = true
+                controlsInteractionTick++
+            },
+            onOpenSpeedDrawer = { openSheet(PlayerSheet.SPEED) },
+            onOpenQualityDrawer = { openSheet(PlayerSheet.QUALITY) },
+            onOpenTrackDrawer = { openSheet(PlayerSheet.TRACKS) },
+            onOpenEpisodeDrawer = {
+                showControls = false
+                activeSheet = PlayerSheet.NONE
+                onOpenEpisodeDrawer()
+            },
+            onOpenMoreDrawer = { openSheet(PlayerSheet.MORE) },
+            onProgressDraggingChanged = { dragging ->
+                isProgressBarDragging = dragging
+                if (!dragging) {
+                    controlsInteractionTick++
                 }
-                onSelectTrack(track)
-                AppToast.show("已切换：${track.name}")
             },
-            onDisableTrack = {
-                onDisableTrack(type)
-                AppToast.show("已关闭字幕")
-            },
-            onResetToDefault = {
-                onResetToDefault(type)
-                AppToast.show("已恢复系统自适应")
-            },
-            onDismiss = { showTrackDrawer = false },
+            onInteraction = { controlsInteractionTick++ },
         )
+    }
+
+    // 自适应悬浮抽屉 / 底部 Sheet（退出动画期间通过 lastActiveSheet 保活内容）
+    val renderedSheet = if (activeSheet != PlayerSheet.NONE) activeSheet else lastActiveSheet
+    PlayerAdaptiveSheetHost(
+        visible = activeSheet != PlayerSheet.NONE,
+        isLandscape = viewportIsLandscape,
+    ) {
+        when (renderedSheet) {
+            PlayerSheet.SPEED -> {
+                SpeedSelectionDrawer(
+                    currentSpeed = playerState.speed,
+                    isLandscape = viewportIsLandscape,
+                    onSelectSpeed = { players.setPlaybackSpeed(it) },
+                    onDismiss = { activeSheet = PlayerSheet.NONE },
+                )
+            }
+            PlayerSheet.QUALITY -> {
+                QualitySelectionDialog(
+                    playUrls = playUrls,
+                    selectedPlayUrl = selectedPlayUrl,
+                    isLandscape = viewportIsLandscape,
+                    onSelectPlayUrl = onSelectPlayUrl,
+                    onDismiss = { activeSheet = PlayerSheet.NONE },
+                )
+            }
+            PlayerSheet.TRACKS -> {
+                UnifiedTrackDrawer(
+                    subtitleTracks = playerState.subtitleTracks,
+                    audioTracks = playerState.audioTracks,
+                    videoTracks = playerState.videoTracks,
+                    isSubtitleDisabled = playerState.isSubtitleDisabled,
+                    isLandscape = viewportIsLandscape,
+                    onSelectTrack = onSelectTrack,
+                    onDisableSubtitle = { onDisableTrack(androidx.media3.common.C.TRACK_TYPE_TEXT) },
+                    onResetToDefault = onResetToDefault,
+                    onDismiss = { activeSheet = PlayerSheet.NONE },
+                )
+            }
+            PlayerSheet.MORE, PlayerSheet.NONE -> {
+                PlayerMoreDrawer(
+                    vodName = vod.vodName,
+                    currentEpisodeName = currentEpisodeName,
+                    playerState = playerState,
+                    opening = opening,
+                    ending = ending,
+                    isLandscape = viewportIsLandscape,
+                    onRefreshPlayback = onRefreshPlayback,
+                    onOpenTracksDrawer = { openSheet(PlayerSheet.TRACKS) },
+                    onSelectResizeMode = { players.setResizeMode(it) },
+                    onSetOpening = onSetOpening,
+                    onResetOpening = onResetOpening,
+                    onSetEnding = onSetEnding,
+                    onResetEnding = onResetEnding,
+                    onDismiss = { activeSheet = PlayerSheet.NONE },
+                )
+            }
+        }
     }
 }

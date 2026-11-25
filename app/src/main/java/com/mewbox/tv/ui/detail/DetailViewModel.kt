@@ -22,6 +22,7 @@ import com.mewbox.tv.player.PlaybackState
 import com.mewbox.tv.player.PlayerTrack
 import com.mewbox.tv.player.Players
 import com.mewbox.tv.util.AppToast
+import com.mewbox.tv.util.TmdbEpisodeMatcher
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
@@ -67,6 +68,7 @@ class DetailViewModel @Inject constructor(
             } else null,
             startInFullscreen = false,
             isCompactEpisodeTitle = settingsRepository.compactEpisodeTitle,
+            isTmdbEpisodeCardEnabled = settingsRepository.tmdbEpisodeCards,
         )
     )
     val uiState: StateFlow<DetailUiState> = _uiState.asStateFlow()
@@ -83,6 +85,9 @@ class DetailViewModel @Inject constructor(
     private var prefetchJob: Job? = null
     private var inFlightResolve: InFlightResolve? = null
     private var tmdbJob: Job? = null
+    private var tmdbSeasonJob: Job? = null
+    private var tmdbSeasonDetailId: Int? = null
+    private var inFlightSeasons: Set<Int> = emptySet()
     private var tmdbRunningName: String? = null
     private var posterProbeJob: Job? = null
     private var originalVodPic: String = ""
@@ -140,7 +145,11 @@ class DetailViewModel @Inject constructor(
             return
         }
         tmdbJob?.cancel()
+        tmdbSeasonJob?.cancel()
+        tmdbSeasonDetailId = null
+        inFlightSeasons = emptySet()
         tmdbRunningName = cleaned
+        _uiState.update { it.copy(tmdbEpisodesBySeason = emptyMap()) }
         tmdbJob = tmdbCoordinator.loadTmdbInfo(
             scope = viewModelScope,
             vodName = name,
@@ -158,6 +167,7 @@ class DetailViewModel @Inject constructor(
                     )
                 }
                 applyTmdbPosterFallbackIfNeeded()
+                refreshTmdbSeasonEpisodesIfNeeded()
             },
         )
     }
@@ -261,6 +271,7 @@ class DetailViewModel @Inject constructor(
     init {
         observePlayerState()
         observeCompactPreference()
+        observeTmdbEpisodeCardsPreference()
         loadDetail(currentSiteKey, currentVodId, initialVodName, autoPlay)
     }
 
@@ -272,10 +283,96 @@ class DetailViewModel @Inject constructor(
         }
     }
 
+    private fun observeTmdbEpisodeCardsPreference() {
+        viewModelScope.launch {
+            settingsRepository.tmdbEpisodeCardsFlow.collect { enabled ->
+                val changed = _uiState.value.isTmdbEpisodeCardEnabled != enabled
+                if (changed) {
+                    _uiState.update { it.copy(isTmdbEpisodeCardEnabled = enabled) }
+                    if (enabled) {
+                        refreshTmdbSeasonEpisodesIfNeeded()
+                    }
+                }
+            }
+        }
+    }
+
     fun toggleEpisodeCompact() {
         val next = !_uiState.value.isCompactEpisodeTitle
         _uiState.update { it.copy(isCompactEpisodeTitle = next) }
         viewModelScope.launch { settingsRepository.setCompactEpisodeTitle(next) }
+    }
+
+    fun toggleTmdbEpisodeCards() {
+        val next = !_uiState.value.isTmdbEpisodeCardEnabled
+        _uiState.update { it.copy(isTmdbEpisodeCardEnabled = next) }
+        viewModelScope.launch { settingsRepository.setTmdbEpisodeCards(next) }
+        if (next) {
+            refreshTmdbSeasonEpisodesIfNeeded()
+        }
+    }
+
+    private fun refreshTmdbSeasonEpisodesIfNeeded() {
+        val state = _uiState.value
+        if (!state.isTmdbEpisodeCardEnabled) return
+        val detail = state.tmdbDetail ?: return
+        if (detail.mediaType != "tv" || detail.id <= 0) return
+        val flag = state.selectedFlag ?: return
+        if (flag.episodes.isEmpty()) return
+
+        if (tmdbSeasonDetailId != detail.id) {
+            tmdbSeasonJob?.cancel()
+            inFlightSeasons = emptySet()
+            tmdbSeasonDetailId = detail.id
+            _uiState.update { it.copy(tmdbEpisodesBySeason = emptyMap()) }
+        }
+
+        val vodName = state.vod?.vodName.orEmpty()
+        val requiredSeasons = TmdbEpisodeMatcher.resolveRequiredSeasons(
+            tmdbDetail = detail,
+            vodName = vodName,
+            flagName = flag.flag,
+            episodes = flag.episodes,
+        )
+        val loadedSeasons = _uiState.value.tmdbEpisodesBySeason.keys
+        val missingSeasons = requiredSeasons.filter { it !in loadedSeasons }
+        if (missingSeasons.isEmpty()) return
+
+        // 若所需季已在拉取中，直接复用进行中请求，避免切线路/配置变更时重复取消重启
+        if (tmdbSeasonJob?.isActive == true && missingSeasons.all { it in inFlightSeasons }) {
+            return
+        }
+
+        val targetSeasons = (inFlightSeasons + missingSeasons)
+            .filter { it !in loadedSeasons }
+            .distinct()
+            .sorted()
+        if (targetSeasons.isEmpty()) return
+
+        tmdbSeasonJob?.cancel()
+        inFlightSeasons = targetSeasons.toSet()
+        val targetDetailId = detail.id
+        var launchedJob: Job? = null
+        launchedJob = tmdbCoordinator.loadSeasonEpisodes(
+            scope = viewModelScope,
+            tmdbDetail = detail,
+            seasonNumbers = targetSeasons,
+            onLoaded = { newlyLoaded ->
+                _uiState.update { current ->
+                    if (current.tmdbDetail?.id != targetDetailId) {
+                        current
+                    } else {
+                        current.copy(tmdbEpisodesBySeason = current.tmdbEpisodesBySeason + newlyLoaded)
+                    }
+                }
+            },
+        )
+        launchedJob.invokeOnCompletion {
+            if (tmdbSeasonJob === launchedJob) {
+                inFlightSeasons = emptySet()
+            }
+        }
+        tmdbSeasonJob = launchedJob
     }
 
     private fun observePlayerState() {
@@ -312,6 +409,9 @@ class DetailViewModel @Inject constructor(
         // 切入新影片加载或重试前，先中止旧请求并清空单例播放器残留直连/请求头，避免加载期间“媒体信息”误显上一部片的数据
         detailJob?.cancel()
         playJob?.cancel()
+        tmdbSeasonJob?.cancel()
+        tmdbSeasonDetailId = null
+        inFlightSeasons = emptySet()
         posterProbeJob?.cancel()
         originalVodPic = ""
         originalPosterLoadFailed = false
@@ -434,6 +534,7 @@ class DetailViewModel @Inject constructor(
                 )
             }
             onVodPosterReady(vod.vodPic)
+            refreshTmdbSeasonEpisodesIfNeeded()
 
             // 加载该视频历史保存的字幕、音轨、视轨用户偏好并注入播放器
             val currentConfigId = repository.getActiveConfigId().also { activeConfigId = it }
@@ -543,6 +644,8 @@ class DetailViewModel @Inject constructor(
                 // 仅当之前未成功启动 TMDB 流程且无详情时才补充启动，避免采集站脏标题推翻豆瓣权威名
                 if (tmdbJob == null && _uiState.value.tmdbDetail == null) {
                     startTmdbLoad(vodName.ifBlank { validVod.vodName })
+                } else {
+                    refreshTmdbSeasonEpisodesIfNeeded()
                 }
                 if (shouldAutoPlay) {
                     _uiState.update { it.copy(startInFullscreen = true) }
@@ -845,6 +948,7 @@ class DetailViewModel @Inject constructor(
                 toastMessage = if (shouldPlay) "切换线路：${flag.flag}" else it.toastMessage,
             )
         }
+        refreshTmdbSeasonEpisodesIfNeeded()
         if (shouldPlay) {
             playEpisode(flag, targetEp, currentPosition)
         } else {
@@ -1007,10 +1111,14 @@ class DetailViewModel @Inject constructor(
                 _uiState.update { it.copy(isSearchingTmdb = true) }
             },
             onSuccess = { detail, imageBase ->
+                tmdbSeasonJob?.cancel()
+                tmdbSeasonDetailId = null
+                inFlightSeasons = emptySet()
                 _uiState.update {
                     it.copy(
                         tmdbDetail = detail,
                         tmdbImageBase = imageBase,
+                        tmdbEpisodesBySeason = emptyMap(),
                         quickPoster = TmdbClient.imageUrl(imageBase, detail.posterPath, "w780").ifEmpty { null },
                         quickBackdrop = TmdbClient.imageUrl(imageBase, detail.backdropPath, "w1280").ifEmpty { null },
                         showTmdbMatchDialog = false,
@@ -1019,6 +1127,7 @@ class DetailViewModel @Inject constructor(
                     )
                 }
                 applyTmdbPosterFallbackIfNeeded()
+                refreshTmdbSeasonEpisodesIfNeeded()
             },
             onError = { errorMsg ->
                 _uiState.update {
@@ -1162,6 +1271,9 @@ class DetailViewModel @Inject constructor(
         super.onCleared()
         detailJob?.cancel()
         playJob?.cancel()
+        tmdbSeasonJob?.cancel()
+        tmdbSeasonDetailId = null
+        inFlightSeasons = emptySet()
         posterProbeJob?.cancel()
         originalVodPic = ""
         originalPosterLoadFailed = false

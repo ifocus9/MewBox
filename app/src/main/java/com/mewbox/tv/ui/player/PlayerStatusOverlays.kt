@@ -1,11 +1,16 @@
 package com.mewbox.tv.ui.player
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
@@ -14,26 +19,30 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.VolumeDown
-import androidx.compose.material.icons.automirrored.filled.VolumeMute
-import androidx.compose.material.icons.automirrored.filled.VolumeUp
-import androidx.compose.material.icons.filled.BrightnessHigh
-import androidx.compose.material.icons.filled.BrightnessLow
-import androidx.compose.material.icons.filled.FastForward
-import androidx.compose.material.icons.filled.FastRewind
+import androidx.compose.material.icons.automirrored.rounded.VolumeDown
+import androidx.compose.material.icons.automirrored.rounded.VolumeOff
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
+import androidx.compose.material.icons.rounded.BrightnessHigh
+import androidx.compose.material.icons.rounded.BrightnessLow
+import androidx.compose.material.icons.rounded.BrightnessMedium
+import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.FastForward
+import androidx.compose.material.icons.rounded.FastRewind
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -41,18 +50,21 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mewbox.tv.player.Players
-import java.util.Locale
+import com.mewbox.tv.ui.theme.MewBoxTheme
+import kotlin.math.roundToInt
 
 /**
- * 播放器轻量缓冲 / 加载提示浮层（对齐 FongMi/TV 的 view_progress 极简轻量转圈与实时网速样式）
- * 无多余背景卡片遮挡画面，中央白色轻量圆弧转圈 + 底部实时下行速率 / 检索状态
+ * 播放器轻量缓冲 / 加载提示浮层
  */
 @Composable
 internal fun PlayerLoadingOverlay(
@@ -79,11 +91,11 @@ internal fun PlayerLoadingOverlay(
                 modifier = Modifier.size(32.dp),
                 color = Color.White,
                 strokeWidth = 3.dp,
-                trackColor = Color.Transparent,
+                trackColor = Color.White.copy(alpha = 0.14f),
                 strokeCap = StrokeCap.Round,
             )
             if (displayText.isNotBlank()) {
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(10.dp))
                 Text(
                     text = displayText,
                     color = Color.White,
@@ -105,46 +117,97 @@ internal fun PlayerLoadingOverlay(
 }
 
 /**
- * 播放错误提示浮层
+ * 播放错误提示浮层（带直达重试与切换线路胶囊按钮）
  */
 @Composable
 internal fun PlayerErrorOverlay(
     errorMessage: String?,
+    onRetry: () -> Unit,
+    onSwitchLine: (() -> Unit)? = null,
 ) {
+    val accent = MewBoxTheme.colors.panelAccent
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0x99000000)),
+            .background(Color.Black.copy(alpha = 0.62f)),
         contentAlignment = Alignment.Center,
     ) {
-        Surface(
-            shape = RoundedCornerShape(12.dp),
-            color = Color(0xE61E1E1E),
-            modifier = Modifier.padding(24.dp),
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier
+                .widthIn(min = 240.dp, max = 360.dp)
+                .padding(horizontal = 24.dp)
+                .playerFlatSurface(shape = RoundedCornerShape(16.dp), baseAlpha = 0.82f)
+                .padding(horizontal = 24.dp, vertical = 20.dp),
         ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 18.dp),
+            Icon(
+                imageVector = Icons.Rounded.ErrorOutline,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(28.dp),
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "播放异常",
+                color = Color.White,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = errorMessage ?: "解析或播放直链失败",
+                color = Color.White.copy(alpha = 0.78f),
+                textAlign = TextAlign.Center,
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    text = "播放异常",
-                    color = MaterialTheme.colorScheme.error,
-                    style = TextStyle(
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    ),
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = errorMessage ?: "解析或播放直链失败",
-                    color = Color.White.copy(alpha = 0.85f),
-                    textAlign = TextAlign.Center,
-                    style = TextStyle(
+                Row(
+                    modifier = Modifier
+                        .height(36.dp)
+                        .clip(CircleShape)
+                        .background(accent.copy(alpha = 0.28f))
+                        .clickable(onClick = onRetry)
+                        .padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Refresh,
+                        contentDescription = null,
+                        tint = accent,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Text(
+                        text = "重新加载",
+                        color = accent,
                         fontSize = 13.sp,
-                        lineHeight = 18.sp,
-                        fontWeight = FontWeight.Normal,
-                    ),
-                )
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+
+                if (onSwitchLine != null) {
+                    Box(
+                        modifier = Modifier
+                            .height(36.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.14f))
+                            .clickable(onClick = onSwitchLine)
+                            .padding(horizontal = 16.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "切换线路",
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
+                }
             }
         }
     }
@@ -165,30 +228,42 @@ internal fun BoxScope.PlayerGestureHud(
     isBoostPlaying: Boolean,
     boostSpeed: Float,
 ) {
-    // 长按倍速播放提示：复用统一的手势 HUD 胶囊，与快进 / 亮度 / 音量保持一致
+    val accent = MewBoxTheme.colors.panelAccent
+
+    // 长按倍速播放提示
     GestureHudPill(visible = isBoostPlaying) {
+        val pulseTransition = rememberInfiniteTransition(label = "boostPulse")
+        val pulseAlpha by pulseTransition.animateFloat(
+            initialValue = 0.55f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 550),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "boostIconAlpha",
+        )
         Icon(
-            imageVector = Icons.Default.FastForward,
+            imageVector = Icons.Rounded.FastForward,
             contentDescription = null,
-            tint = Color.White,
+            tint = Color.White.copy(alpha = pulseAlpha),
             modifier = Modifier.size(20.dp),
         )
         Spacer(modifier = Modifier.width(8.dp))
         Text(
-            text = formatPlaybackSpeed(boostSpeed),
+            text = "${formatSpeedLabel(boostSpeed)} 倍速中",
             color = Color.White,
             style = TextStyle(
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
                 fontFeatureSettings = "tnum",
-                textAlign = TextAlign.Center,
             ),
         )
     }
 
+    // 水平滑屏快进 / 快退提示
     GestureHudPill(visible = isSeekingByGesture) {
         Icon(
-            imageVector = if (gestureSeekDeltaMs >= 0) Icons.Default.FastForward else Icons.Default.FastRewind,
+            imageVector = if (gestureSeekDeltaMs >= 0) Icons.Rounded.FastForward else Icons.Rounded.FastRewind,
             contentDescription = null,
             tint = Color.White,
             modifier = Modifier.size(20.dp),
@@ -196,20 +271,31 @@ internal fun BoxScope.PlayerGestureHud(
         Spacer(modifier = Modifier.width(8.dp))
         val sign = if (gestureSeekDeltaMs >= 0) "+" else ""
         Text(
-            text = "${Players.formatDuration(gestureSeekTargetMs)} ($sign${gestureSeekDeltaMs / 1000}s)",
-            color = Color.White,
+            text = buildAnnotatedString {
+                withStyle(SpanStyle(color = Color.White, fontWeight = FontWeight.SemiBold)) {
+                    append(Players.formatDuration(gestureSeekTargetMs))
+                }
+                append("  ")
+                withStyle(SpanStyle(color = accent, fontWeight = FontWeight.Medium)) {
+                    append("$sign${gestureSeekDeltaMs / 1000}s")
+                }
+            },
             style = TextStyle(
                 fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
                 fontFeatureSettings = "tnum",
-                textAlign = TextAlign.Center,
             ),
         )
     }
 
+    // 亮度调节 HUD
     GestureHudPill(visible = isBrightnessAdjusting) {
+        val brightnessIcon = when {
+            currentBrightness > 0.66f -> Icons.Rounded.BrightnessHigh
+            currentBrightness > 0.33f -> Icons.Rounded.BrightnessMedium
+            else -> Icons.Rounded.BrightnessLow
+        }
         Icon(
-            imageVector = if (currentBrightness > 0.5f) Icons.Default.BrightnessHigh else Icons.Default.BrightnessLow,
+            imageVector = brightnessIcon,
             contentDescription = null,
             tint = Color.White,
             modifier = Modifier.size(20.dp),
@@ -218,19 +304,30 @@ internal fun BoxScope.PlayerGestureHud(
         LinearProgressIndicator(
             progress = { currentBrightness },
             modifier = Modifier
-                .width(100.dp)
+                .width(96.dp)
                 .height(4.dp)
-                .clip(RoundedCornerShape(2.dp)),
+                .clip(CircleShape),
             color = Color.White,
-            trackColor = Color.White.copy(alpha = 0.3f),
+            trackColor = Color.White.copy(alpha = 0.28f),
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = "${(currentBrightness * 100f).roundToInt().coerceIn(0, 100)}%",
+            color = Color.White.copy(alpha = 0.9f),
+            style = TextStyle(
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                fontFeatureSettings = "tnum",
+            ),
         )
     }
 
+    // 音量调节 HUD
     GestureHudPill(visible = isVolumeAdjusting) {
         val volumeIcon = when {
-            currentVolumeRatio <= 0.05f -> Icons.AutoMirrored.Filled.VolumeMute
-            currentVolumeRatio > 0.5f -> Icons.AutoMirrored.Filled.VolumeUp
-            else -> Icons.AutoMirrored.Filled.VolumeDown
+            currentVolumeRatio <= 0.05f -> Icons.AutoMirrored.Rounded.VolumeOff
+            currentVolumeRatio > 0.5f -> Icons.AutoMirrored.Rounded.VolumeUp
+            else -> Icons.AutoMirrored.Rounded.VolumeDown
         }
         Icon(
             imageVector = volumeIcon,
@@ -242,25 +339,33 @@ internal fun BoxScope.PlayerGestureHud(
         LinearProgressIndicator(
             progress = { currentVolumeRatio },
             modifier = Modifier
-                .width(100.dp)
+                .width(96.dp)
                 .height(4.dp)
-                .clip(RoundedCornerShape(2.dp)),
+                .clip(CircleShape),
             color = Color.White,
-            trackColor = Color.White.copy(alpha = 0.3f),
+            trackColor = Color.White.copy(alpha = 0.28f),
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = "${(currentVolumeRatio * 100f).roundToInt().coerceIn(0, 100)}%",
+            color = Color.White.copy(alpha = 0.9f),
+            style = TextStyle(
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                fontFeatureSettings = "tnum",
+            ),
         )
     }
 }
 
 /**
- * 统一的手势 HUD 胶囊，自带 150ms 淡入淡出。
- * 显隐必须由 visible 传入（不要在调用处用 if 包一层），否则组件被直接移出组合，退出动画不会播放。
- * align 必须挂在 AnimatedVisibility 这一层：动画容器内部是 wrapContent，align 放内层会跑到左上角。
+ * 统一手势 HUD 圆角胶囊（带暗色微玻璃质感和 150ms 淡入淡出）
  */
 @Composable
 private fun BoxScope.GestureHudPill(
     visible: Boolean = true,
     alignment: Alignment = Alignment.TopCenter,
-    topPadding: Dp = 24.dp,
+    topPadding: Dp = 22.dp,
     modifier: Modifier = Modifier,
     content: @Composable RowScope.() -> Unit,
 ) {
@@ -271,69 +376,46 @@ private fun BoxScope.GestureHudPill(
         exit = fadeOut(animationSpec = tween(150)),
         modifier = Modifier.align(alignment),
     ) {
-        Surface(
-            shape = RoundedCornerShape(12.dp),
-            color = Color(0x80000000),
-            modifier = modifier.then(
-                if (topPadding > 0.dp) {
-                    Modifier.padding(top = insets.top + topPadding)
-                } else {
-                    Modifier
-                }
-            ),
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                content = content,
-            )
-        }
+        Row(
+            modifier = modifier
+                .then(
+                    if (topPadding > 0.dp) {
+                        Modifier.padding(top = insets.top + topPadding)
+                    } else {
+                        Modifier
+                    },
+                )
+                .playerFlatSurface(shape = CircleShape, baseAlpha = 0.62f)
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            content = content,
+        )
     }
 }
 
 /**
- * 播放器轻量操作提示胶囊（用于刷新、跳过片头片尾、选集提示等操作反馈）
- * 视觉与手势 HUD 胶囊统一：12dp 圆角 / 50% 纯黑 / 16×8 内边距 / 13sp Medium 字重。
- * 显隐、动画与定位仍由 SnackbarHost 托管，本组件只负责外观渲染。
+ * 播放器轻量操作提示胶囊（供 SnackbarHost 宿主渲染）
  */
 @Composable
 fun PlayerToastPill(
     message: String,
     modifier: Modifier = Modifier,
 ) {
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = Color(0x80000000),
-        modifier = modifier,
+    Row(
+        modifier = modifier
+            .playerFlatSurface(shape = CircleShape, baseAlpha = 0.66f)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = message,
-                color = Color.White,
-                style = TextStyle(
-                    fontSize = 13.sp,
-                    lineHeight = 18.sp,
-                    fontWeight = FontWeight.Medium,
-                    textAlign = TextAlign.Center,
-                ),
-            )
-        }
+        Text(
+            text = message,
+            color = Color.White,
+            style = TextStyle(
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+                fontWeight = FontWeight.Medium,
+                textAlign = TextAlign.Center,
+            ),
+        )
     }
 }
-
-/**
- * 格式化倍速文本（对齐 FongMi 的 SpeedSetting.format: "倍速 3.0x"）
- */
-private fun formatPlaybackSpeed(speed: Float): String {
-    val isSingleDecimal = Math.abs(speed * 10 - Math.round(speed * 10)) < 0.001f
-    val formatted = if (isSingleDecimal) {
-        String.format(Locale.US, "%.1f", speed)
-    } else {
-        String.format(Locale.US, "%.2f", speed)
-    }
-    return "倍速 ${formatted}x"
-}
-

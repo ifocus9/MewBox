@@ -1,8 +1,12 @@
 package com.mewbox.tv.api
 
 import com.mewbox.tv.api.tmdb.TmdbClient
+import com.mewbox.tv.api.tmdb.TmdbHttpException
+import com.mewbox.tv.api.tmdb.bean.TmdbDetail
 import com.mewbox.tv.api.tmdb.bean.TmdbMedia
 import com.mewbox.tv.api.tmdb.bean.TmdbResult
+import com.mewbox.tv.api.tmdb.bean.TmdbSeasonDetail
+import kotlinx.serialization.json.Json
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Request
 import org.junit.Assert.assertEquals
@@ -157,5 +161,58 @@ class TmdbClientTest {
         )
         assertNull(TmdbClient.pickFallbackMatch("任意片名", result))
         assertNull(TmdbClient.pickFallbackMatch("任意片名", TmdbResult()))
+    }
+
+    @Test
+    fun testStillUrlUsesW300() {
+        assertEquals(
+            "https://image.tmdb.org/t/p/w300/still.jpg",
+            TmdbClient.stillUrl(null, "/still.jpg"),
+        )
+        assertEquals("", TmdbClient.stillUrl(null, null))
+    }
+
+    @Test
+    fun testSeasonAndLegacyTmdbDetailDeserialization() {
+        val json = Json {
+            ignoreUnknownKeys = true
+            coerceInputValues = true
+            isLenient = true
+        }
+        val legacyDetailJson = """{"id": 123, "name": "旧缓存剧集", "overview": "简介"}"""
+        val legacyDetail = json.decodeFromString<TmdbDetail>(legacyDetailJson)
+        assertEquals(123, legacyDetail.id)
+        assertEquals(0, legacyDetail.numberOfSeasons)
+        assertTrue(legacyDetail.seasons.isEmpty())
+
+        val seasonJson = """
+            {
+              "id": 999,
+              "season_number": 1,
+              "name": "第 1 季",
+              "episodes": [
+                {
+                  "id": 1001,
+                  "season_number": 1,
+                  "episode_number": 2,
+                  "name": "也不一定要是魔法…",
+                  "still_path": "/s1e2.jpg"
+                }
+              ]
+            }
+        """.trimIndent()
+        val season = json.decodeFromString<TmdbSeasonDetail>(seasonJson)
+        assertEquals(1, season.seasonNumber)
+        assertEquals(1, season.episodes.size)
+        assertEquals(2, season.episodes[0].episodeNumber)
+        assertEquals("也不一定要是魔法…", season.episodes[0].name)
+        assertEquals("/s1e2.jpg", season.episodes[0].stillPath)
+    }
+
+    @Test
+    fun testTmdbHttpExceptionPreservesStatusCode() {
+        val err = TmdbHttpException(404, "HTTP 404: not found")
+        assertEquals(404, err.statusCode)
+        assertTrue(err.message.orEmpty().contains("404"))
     }
 }

@@ -190,7 +190,7 @@ class NodeService : Service() {
         val t4Url = lastAddress?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() }?.let { "$it/t4/config" }.orEmpty()
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_media_play)
-            .setContentTitle("MewBox T4 服务运行中")
+            .setContentTitle("轻影 T4 服务运行中")
             .setContentText(t4Url.ifBlank { "本地节点服务持续运行中" })
             .setOngoing(true)
             .setOnlyAlertOnce(true)

@@ -31,6 +31,16 @@ import com.mewbox.tv.ui.theme.LiquidGlassDefaults
 import com.mewbox.tv.ui.theme.MewBoxTheme
 import kotlin.math.min
 
+private val LightGlassFallback = Color.White.copy(alpha = 0.88f)
+private val LightGlassGlossTop = Color.White.copy(alpha = 0.45f)
+private val LightGlassBorderTop = Color.White.copy(alpha = 0.85f)
+private val LightGlassBorderBottom = Color(0x140F172A)
+
+private val DarkGlassFallback = Color(0xFF14161B).copy(alpha = 0.44f)
+private val DarkGlassGlossTop = Color.White.copy(alpha = 0.10f)
+private val DarkGlassBorderTop = Color.White.copy(alpha = 0.22f)
+private val DarkGlassBorderBottom = Color.White.copy(alpha = 0.06f)
+
 val LocalTopBarGlassBackdrop = compositionLocalOf<LayerBackdrop?> { null }
 
 /**
@@ -40,16 +50,39 @@ val LocalTopBarGlassBackdrop = compositionLocalOf<LayerBackdrop?> { null }
 @Composable
 fun Modifier.pseudoGlass(
     shape: Shape,
-    baseColor: Color = MewBoxTheme.colors.glassFallback,
+    baseColor: Color = Color.Unspecified,
     strokeWidth: Dp = 0.75.dp,
+    forceLight: Boolean = false,
+    forceDark: Boolean = false,
 ): Modifier {
     val extendedColors = MewBoxTheme.colors
+    val resolvedBase = when {
+        baseColor != Color.Unspecified -> baseColor
+        forceLight -> LightGlassFallback
+        forceDark -> DarkGlassFallback
+        else -> extendedColors.glassFallback
+    }
+    val glossTop = when {
+        forceLight -> LightGlassGlossTop
+        forceDark -> DarkGlassGlossTop
+        else -> extendedColors.glassGlossTop
+    }
+    val borderTop = when {
+        forceLight -> LightGlassBorderTop
+        forceDark -> DarkGlassBorderTop
+        else -> extendedColors.glassBorderTop
+    }
+    val borderBottom = when {
+        forceLight -> LightGlassBorderBottom
+        forceDark -> DarkGlassBorderBottom
+        else -> extendedColors.glassBorderBottom
+    }
     return this
         .clip(shape)
-        .background(baseColor)
+        .background(resolvedBase)
         .background(
             Brush.verticalGradient(
-                0f to extendedColors.glassGlossTop,
+                0f to glossTop,
                 0.5f to Color.Transparent,
             )
         )
@@ -57,8 +90,8 @@ fun Modifier.pseudoGlass(
             width = strokeWidth,
             brush = Brush.verticalGradient(
                 listOf(
-                    extendedColors.glassBorderTop,
-                    extendedColors.glassBorderBottom,
+                    borderTop,
+                    borderBottom,
                 )
             ),
             shape = shape,
@@ -76,14 +109,18 @@ fun Modifier.glassTopBarSurface(
     shape: Shape,
     fallbackColor: Color = Color.Unspecified,
     pressEffect: Boolean = true,
-): Modifier = glassSurface(LocalTopBarGlassBackdrop.current ?: emptyBackdrop(), shape, fallbackColor, pressEffect)
+    forceLight: Boolean = false,
+    forceDark: Boolean = false,
+): Modifier = glassSurface(LocalTopBarGlassBackdrop.current ?: emptyBackdrop(), shape, fallbackColor, pressEffect, forceLight, forceDark)
 
 @Composable
 fun Modifier.glassSurface(
     shape: Shape,
     fallbackColor: Color = Color.Unspecified,
     pressEffect: Boolean = true,
-): Modifier = glassSurface(emptyBackdrop(), shape, fallbackColor, pressEffect)
+    forceLight: Boolean = false,
+    forceDark: Boolean = false,
+): Modifier = glassSurface(emptyBackdrop(), shape, fallbackColor, pressEffect, forceLight, forceDark)
 
 @Composable
 fun Modifier.glassSurface(
@@ -91,27 +128,30 @@ fun Modifier.glassSurface(
     shape: Shape,
     fallbackColor: Color = Color.Unspecified,
     pressEffect: Boolean = true,
+    forceLight: Boolean = false,
+    forceDark: Boolean = false,
 ): Modifier {
     val config = LiquidGlassDefaults.Config
     val glassEnabled = backdrop != null &&
         config.controlsEnabled &&
         LiquidGlassDefaults.isSupported
     if (!glassEnabled) {
-        val baseColor = if (fallbackColor != Color.Unspecified) fallbackColor else MewBoxTheme.colors.glassFallback
-        return this.pseudoGlass(shape = shape, baseColor = baseColor)
+        return this.pseudoGlass(shape = shape, baseColor = fallbackColor, forceLight = forceLight, forceDark = forceDark)
     }
 
     val isDark = MewBoxTheme.isDark
+    val isLightGlass = forceLight || (!forceDark && !isDark)
     val density = LocalDensity.current
     val blurPx = with(density) { config.blurDp.dp.toPx() }
     val distortionPx = with(density) { config.distortionDp.dp.toPx() }
     val supportsLens = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
-    val containerColor = if (isDark) {
-        MaterialTheme.colorScheme.surfaceContainerHigh.copy(
+    val containerColor = when {
+        forceLight -> Color.White.copy(alpha = 0.62f * config.containerAlphaScale)
+        forceDark -> Color(0xFF14161B).copy(alpha = 0.36f * config.containerAlphaScale)
+        isDark -> MaterialTheme.colorScheme.surfaceContainerHigh.copy(
             alpha = 0.68f * config.containerAlphaScale
         )
-    } else {
-        MaterialTheme.colorScheme.surfaceBright.copy(
+        else -> MaterialTheme.colorScheme.surfaceBright.copy(
             alpha = 0.62f * config.containerAlphaScale
         )
     }
@@ -138,11 +178,11 @@ fun Modifier.glassSurface(
                 )
             }
         },
-        highlight = { Highlight.Default.copy(alpha = if (isDark) 0.45f else 1f) },
+        highlight = { Highlight.Default.copy(alpha = if (isLightGlass) 1f else 0.45f) },
         shadow = {
             Shadow(
                 radius = 8.dp,
-                color = Color.Black.copy(if (isDark) 0.3f else 0.1f),
+                color = Color.Black.copy(if (isLightGlass) 0.14f else 0.3f),
             )
         },
         layerBlock = interactiveHighlight?.let(::pressGrowthLayerBlock),

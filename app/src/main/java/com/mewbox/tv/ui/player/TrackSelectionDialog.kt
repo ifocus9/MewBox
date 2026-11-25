@@ -1,6 +1,5 @@
 package com.mewbox.tv.ui.player
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,12 +14,15 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -33,45 +35,43 @@ import androidx.media3.common.C
 import com.mewbox.tv.bean.PlayUrl
 import com.mewbox.tv.player.PlayerTrack
 import com.mewbox.tv.ui.components.PanelAccent
+import com.mewbox.tv.util.AppToast
+import kotlin.math.abs
 
 /**
- * 播放器源画质切换弹窗（4K / 1080P / 原画等，对应源返回的 PlayUrl 列表）
+ * 播放器源画质切换面板（4K / 1080P / 原画等，对应源返回的 PlayUrl 列表）
  */
 @Composable
 internal fun QualitySelectionDialog(
     playUrls: List<PlayUrl>,
     selectedPlayUrl: PlayUrl?,
+    isLandscape: Boolean,
     onSelectPlayUrl: (PlayUrl) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    PlayerDrawerShell(onDismiss = onDismiss) {
-        // 顶部标题栏
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text(
-                text = "画质选择",
-                fontSize = 18.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = Color.White,
-            )
-        }
+    PlayerDrawerShell(
+        onDismiss = onDismiss,
+        isLandscape = isLandscape,
+    ) {
+        Text(
+            text = "画质选择",
+            fontSize = 17.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = Color.White,
+        )
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
-        // 画质列表（复用轨道抽屉的 TrackItemRow，选中色同为 PanelAccent）
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
                 .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             playUrls.forEach { item ->
                 val isSelected = item == selectedPlayUrl || item.url == selectedPlayUrl?.url
-                TrackItemRow(
+                DrawerOptionRow(
                     title = item.name,
                     isSelected = isSelected,
                     onClick = {
@@ -85,84 +85,146 @@ internal fun QualitySelectionDialog(
 }
 
 /**
- * 播放器轨道切换抽屉（字幕、音轨、视轨）。
- *
- * 与选集抽屉共用 [PlayerDrawerShell]：贴右、无圆角、不透明深灰底、全高，
- * 返回键 / 点空白关闭 / 遥控器焦点由外壳统一处理。内容层保持原有轨道列表。
+ * 播放器倍速切换面板
  */
 @Composable
-internal fun TrackSelectionDialog(
-    type: Int,
-    tracks: List<PlayerTrack>,
-    isTypeDisabled: Boolean = false,
-    onSelectTrack: (PlayerTrack) -> Unit,
-    onDisableTrack: () -> Unit,
-    onResetToDefault: () -> Unit,
+internal fun SpeedSelectionDrawer(
+    currentSpeed: Float,
+    isLandscape: Boolean,
+    onSelectSpeed: (Float) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val title = when (type) {
-        C.TRACK_TYPE_TEXT -> "字幕选择"
-        C.TRACK_TYPE_AUDIO -> "音轨选择"
-        C.TRACK_TYPE_VIDEO -> "视轨清晰度"
-        else -> "轨道选择"
-    }
+    PlayerDrawerShell(
+        onDismiss = onDismiss,
+        isLandscape = isLandscape,
+    ) {
+        Text(
+            text = "播放倍速",
+            fontSize = 17.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = Color.White,
+        )
 
-    PlayerDrawerShell(onDismiss = onDismiss) {
-        // 顶部标题栏
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text(
-                text = title,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = Color.White,
-            )
-        }
+        Spacer(modifier = Modifier.height(10.dp))
 
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // 轨道选择列表
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
                 .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            if (type == C.TRACK_TYPE_TEXT) {
-                // 字幕选项：首项为【关闭字幕】
-                TrackItemRow(
-                    title = "关闭字幕",
-                    subtitle = if (isTypeDisabled) "当前已关闭字幕展示" else "不显示任何字幕",
-                    isSelected = isTypeDisabled,
+            PLAYER_SPEED_OPTIONS.forEach { speed ->
+                val isSelected = abs(currentSpeed - speed) < 0.02f
+                DrawerOptionRow(
+                    title = formatSpeedLabel(speed),
+                    subtitle = null,
+                    isSelected = isSelected,
                     onClick = {
-                        onDisableTrack()
+                        onSelectSpeed(speed)
                         onDismiss()
                     },
                 )
+            }
+        }
+    }
+}
+
+/**
+ * 三合一轨道切换抽屉（字幕 / 音轨 / 视轨）。
+ *
+ * 顶部通过胶囊 Tab bar 切换轨道类型，方便在同一面板中连切字幕与音轨无需反复开关。
+ */
+@Composable
+internal fun UnifiedTrackDrawer(
+    subtitleTracks: List<PlayerTrack>,
+    audioTracks: List<PlayerTrack>,
+    videoTracks: List<PlayerTrack>,
+    isSubtitleDisabled: Boolean,
+    initialTab: Int = 0,
+    isLandscape: Boolean,
+    onSelectTrack: (PlayerTrack) -> Unit,
+    onDisableSubtitle: () -> Unit,
+    onResetToDefault: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var selectedTab by remember(initialTab) { mutableIntStateOf(initialTab.coerceIn(0, 2)) }
+
+    val tabs = remember(subtitleTracks.size, audioTracks.size, videoTracks.size) {
+        listOf(
+            if (subtitleTracks.isNotEmpty()) "字幕(${subtitleTracks.size})" else "字幕",
+            if (audioTracks.isNotEmpty()) "音轨(${audioTracks.size})" else "音轨",
+            if (videoTracks.isNotEmpty()) "视轨(${videoTracks.size})" else "视轨",
+        )
+    }
+
+    val trackType = when (selectedTab) {
+        0 -> C.TRACK_TYPE_TEXT
+        1 -> C.TRACK_TYPE_AUDIO
+        else -> C.TRACK_TYPE_VIDEO
+    }
+    val tracks = when (selectedTab) {
+        0 -> subtitleTracks
+        1 -> audioTracks
+        else -> videoTracks
+    }
+
+    PlayerDrawerShell(
+        onDismiss = onDismiss,
+        isLandscape = isLandscape,
+    ) {
+        Text(
+            text = "轨道设置",
+            fontSize = 17.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = Color.White,
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        PlayerDrawerTabBar(
+            tabs = tabs,
+            selectedIndex = selectedTab,
+            onSelect = { selectedTab = it },
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (trackType == C.TRACK_TYPE_TEXT) {
+                DrawerOptionRow(
+                    title = "关闭字幕",
+                    subtitle = if (isSubtitleDisabled) "当前已关闭字幕展示" else "不显示任何字幕",
+                    isSelected = isSubtitleDisabled,
+                    onClick = {
+                        onDisableSubtitle()
+                        AppToast.show("已关闭字幕")
+                    },
+                )
             } else {
-                // 音频/视频：首项为【默认（自动）】
                 val isAnySelected = tracks.any { it.isSelected }
-                TrackItemRow(
+                DrawerOptionRow(
                     title = "默认（自动推荐）",
-                    subtitle = if (type == C.TRACK_TYPE_VIDEO) "跟随源站或自适应码率" else "系统自适应音频流",
+                    subtitle = if (trackType == C.TRACK_TYPE_VIDEO) "跟随源站或自适应码率" else "系统自适应音频流",
                     isSelected = !isAnySelected,
                     onClick = {
-                        onResetToDefault()
-                        onDismiss()
+                        onResetToDefault(trackType)
+                        AppToast.show("已恢复系统自适应")
                     },
                 )
             }
 
             if (tracks.isEmpty()) {
-                val emptyMsg = when (type) {
+                val emptyMsg = when (trackType) {
                     C.TRACK_TYPE_TEXT -> "当前视频未检测到外挂或内嵌字幕轨"
                     C.TRACK_TYPE_AUDIO -> "当前视频仅检测到单条默认音轨"
-                    C.TRACK_TYPE_VIDEO -> "当前视频仅检测到单一清晰度流"
-                    else -> "暂无可用轨道"
+                    else -> "当前视频仅检测到单一清晰度流"
                 }
                 Box(
                     modifier = Modifier
@@ -172,29 +234,29 @@ internal fun TrackSelectionDialog(
                 ) {
                     Text(
                         text = emptyMsg,
-                        fontSize = 14.sp,
-                        color = Color.White.copy(alpha = 0.5f),
+                        fontSize = 13.5.sp,
+                        color = Color.White.copy(alpha = 0.52f),
                     )
                 }
             } else {
                 tracks.forEach { track ->
-                    val selected = if (type == C.TRACK_TYPE_TEXT) {
-                        !isTypeDisabled && track.isSelected
+                    val selected = if (trackType == C.TRACK_TYPE_TEXT) {
+                        !isSubtitleDisabled && track.isSelected
                     } else {
                         track.isSelected
                     }
-                    TrackItemRow(
+                    DrawerOptionRow(
                         title = track.name,
                         subtitle = track.details,
                         isSupported = track.isSupported,
                         isSelected = selected,
                         onClick = {
                             if (!track.isSupported) {
-                                com.mewbox.tv.util.AppToast.show("当前设备暂不支持解码此音轨 (${track.name})")
-                                return@TrackItemRow
+                                AppToast.show("当前设备暂不支持解码此轨道 (${track.name})")
+                                return@DrawerOptionRow
                             }
                             onSelectTrack(track)
-                            onDismiss()
+                            AppToast.show("已切换：${track.name}")
                         },
                     )
                 }
@@ -204,7 +266,7 @@ internal fun TrackSelectionDialog(
 }
 
 @Composable
-private fun TrackItemRow(
+internal fun DrawerOptionRow(
     title: String,
     subtitle: String? = null,
     isSupported: Boolean = true,
@@ -212,23 +274,23 @@ private fun TrackItemRow(
     onClick: () -> Unit,
 ) {
     val activeBg = when {
-        isSelected -> PanelAccent.copy(alpha = 0.28f)
-        !isSupported -> Color(0x0AFFFFFF)
-        else -> Color(0x11FFFFFF)
+        isSelected -> PanelAccent.copy(alpha = 0.24f)
+        !isSupported -> Color.White.copy(alpha = 0.04f)
+        else -> Color.White.copy(alpha = 0.08f)
     }
 
     Surface(
         onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp)),
+            .clip(RoundedCornerShape(12.dp)),
         color = activeBg,
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(12.dp),
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 8.dp),
+                .padding(horizontal = 14.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
@@ -243,7 +305,7 @@ private fun TrackItemRow(
                     Text(
                         text = title,
                         fontSize = 14.sp,
-                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
                         color = when {
                             isSelected -> PanelAccent
                             !isSupported -> Color.White.copy(alpha = 0.45f)
@@ -271,12 +333,12 @@ private fun TrackItemRow(
                 }
 
                 if (!subtitle.isNullOrBlank()) {
-                    Spacer(modifier = Modifier.height(1.dp))
+                    Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = subtitle,
                         fontSize = 11.5.sp,
                         color = when {
-                            isSelected -> PanelAccent.copy(alpha = 0.8f)
+                            isSelected -> PanelAccent.copy(alpha = 0.82f)
                             !isSupported -> Color.White.copy(alpha = 0.35f)
                             else -> Color.White.copy(alpha = 0.6f)
                         },
@@ -287,9 +349,9 @@ private fun TrackItemRow(
             }
 
             if (isSelected) {
-                Spacer(modifier = Modifier.width(6.dp))
+                Spacer(modifier = Modifier.width(8.dp))
                 Icon(
-                    imageVector = Icons.Default.Check,
+                    imageVector = Icons.Rounded.Check,
                     contentDescription = "已选择",
                     tint = PanelAccent,
                     modifier = Modifier.size(18.dp),

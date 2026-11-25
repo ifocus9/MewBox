@@ -96,6 +96,36 @@ data class TmdbCredits(
     @SerialName("crew") val crew: List<TmdbCrewMember> = emptyList(),
 )
 
+@Serializable
+data class TmdbSeasonSummary(
+    @SerialName("id") val id: Int = 0,
+    @SerialName("season_number") val seasonNumber: Int = 0,
+    @SerialName("name") val name: String = "",
+    @SerialName("episode_count") val episodeCount: Int = 0,
+    @SerialName("air_date") val airDate: String? = null,
+    @SerialName("poster_path") val posterPath: String? = null,
+)
+
+@Serializable
+data class TmdbEpisode(
+    @SerialName("id") val id: Int = 0,
+    @SerialName("season_number") val seasonNumber: Int = 0,
+    @SerialName("episode_number") val episodeNumber: Int = 0,
+    @SerialName("name") val name: String = "",
+    @SerialName("overview") val overview: String = "",
+    @SerialName("still_path") val stillPath: String? = null,
+    @SerialName("air_date") val airDate: String? = null,
+    @SerialName("runtime") val runtime: Int? = null,
+)
+
+@Serializable
+data class TmdbSeasonDetail(
+    @SerialName("id") val id: Int = 0,
+    @SerialName("season_number") val seasonNumber: Int = 0,
+    @SerialName("name") val name: String = "",
+    @SerialName("episodes") val episodes: List<TmdbEpisode> = emptyList(),
+)
+
 /**
  * TMDB 影片/剧集详情（含 append_to_response=credits,images,recommendations,similar）。
  */
@@ -119,6 +149,9 @@ data class TmdbDetail(
     @SerialName("runtime") val runtime: Int? = null,
     @SerialName("episode_run_time") val episodeRunTime: List<Int> = emptyList(),
     @SerialName("status") val status: String? = null,
+    @SerialName("number_of_seasons") val numberOfSeasons: Int = 0,
+    @SerialName("number_of_episodes") val numberOfEpisodes: Int = 0,
+    @SerialName("seasons") val seasons: List<TmdbSeasonSummary> = emptyList(),
     @SerialName("credits") val credits: TmdbCredits? = null,
     @SerialName("images") val images: TmdbImages? = null,
     @SerialName("recommendations") val recommendations: TmdbResult? = null,

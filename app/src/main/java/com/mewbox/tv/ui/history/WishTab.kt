@@ -19,6 +19,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -37,10 +39,10 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -65,8 +67,6 @@ import com.mewbox.tv.ui.theme.MewBoxTheme
 import kotlinx.coroutines.flow.distinctUntilChanged
 import timber.log.Timber
 import java.util.Locale
-import kotlin.math.cos
-import kotlin.math.sin
 
 /** 海报与右侧信息区共用固定高度，保证两栏上下边缘严格对齐。 */
 private val WishPosterWidth = 96.dp
@@ -478,23 +478,16 @@ private fun DoubanRatingRow(
 private fun RatingStar(fill: Float) {
     val active = DoubanStarColor
     val inactive = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.28f)
+    val starPainter = rememberVectorPainter(Icons.Rounded.Star)
     Canvas(modifier = Modifier.size(15.dp)) {
-        val radius = size.minDimension / 2f
-        val center = Offset(size.width / 2f, size.height / 2f)
-        val star = Path().apply {
-            for (i in 0 until 10) {
-                val angle = Math.toRadians(-90.0 + i * 36.0)
-                val r = if (i % 2 == 0) radius else radius * 0.45f
-                val x = center.x + (cos(angle) * r).toFloat()
-                val y = center.y + (sin(angle) * r).toFloat()
-                if (i == 0) moveTo(x, y) else lineTo(x, y)
-            }
-            close()
+        with(starPainter) {
+            draw(size = size, colorFilter = ColorFilter.tint(inactive))
         }
-        drawPath(star, inactive)
         if (fill > 0f) {
             clipRect(right = size.width * fill) {
-                drawPath(star, active)
+                with(starPainter) {
+                    draw(size = size, colorFilter = ColorFilter.tint(active))
+                }
             }
         }
     }

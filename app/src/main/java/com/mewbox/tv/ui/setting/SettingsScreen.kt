@@ -34,7 +34,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -258,7 +258,7 @@ fun SettingsScreen(
                     SettingDivider()
                     SettingRow(
                         title = "关于",
-                        value = "MewBox ${BuildConfig.VERSION_NAME}",
+                        value = "轻影 ${BuildConfig.VERSION_NAME}",
                         onClick = { showAboutDialog = true },
                     )
                 }
@@ -393,8 +393,8 @@ private fun SubscriptionRow(
                 .size(40.dp),
         ) {
             Icon(
-                imageVector = Icons.Default.History,
-                contentDescription = "订阅列表",
+                imageVector = Icons.Rounded.SwapHoriz,
+                contentDescription = "切换订阅",
                 modifier = Modifier.size(22.dp),
                 tint = TextSecondary,
             )

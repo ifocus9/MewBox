@@ -1,6 +1,7 @@
 package com.mewbox.tv.ui.detail
 
 import com.mewbox.tv.api.tmdb.bean.TmdbDetail
+import com.mewbox.tv.api.tmdb.bean.TmdbEpisode
 import com.mewbox.tv.api.tmdb.bean.TmdbMedia
 import com.mewbox.tv.bean.Episode
 import com.mewbox.tv.bean.Flag
@@ -31,6 +32,9 @@ data class DetailUiState(
     val toastMessage: String? = null,
     val tmdbDetail: TmdbDetail? = null,
     val tmdbImageBase: String = "",
+    val tmdbEpisodesBySeason: Map<Int, List<TmdbEpisode>> = emptyMap(),
+    /** 剧照选集卡片开关，全局记忆 */
+    val isTmdbEpisodeCardEnabled: Boolean = true,
     /** searchMulti 命中后第一时间回填，供海报与全屏虚化背景快速出图 */
     val quickPoster: String? = null,
     val quickBackdrop: String? = null,

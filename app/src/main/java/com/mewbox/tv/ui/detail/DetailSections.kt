@@ -1,7 +1,7 @@
 package com.mewbox.tv.ui.detail
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,9 +23,9 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Group
-import androidx.compose.material.icons.filled.LocalOffer
-import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.rounded.Category
+import androidx.compose.material.icons.rounded.Group
+import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -35,9 +35,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -46,17 +44,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.mewbox.tv.api.tmdb.bean.TmdbCastMember
-import com.mewbox.tv.bean.Flag
 import com.mewbox.tv.bean.Vod
 
 private const val DetailCardAlpha = 0.5f
-private const val DetailGlassGlossAlpha = 0.06f
-private const val DetailGlassHighlightTopAlpha = 0.35f
-private const val DetailGlassHighlightBottomAlpha = 0.06f
+private const val DetailSelectedCardAlpha = 0.18f
+private const val DetailSelectedBorderAlpha = 0.45f
 
 internal val DetailItemHeight = 70.dp
 internal val DetailItemMinWidth = 160.dp
 internal val DetailItemWidth = 160.dp
+private val DetailCardShape = RoundedCornerShape(16.dp)
 private val CastAvatarSize = 72.dp
 private val CastItemWidth = 84.dp
 
@@ -64,29 +61,13 @@ private val CastItemWidth = 84.dp
 internal fun detailCardColor(): Color =
     MaterialTheme.colorScheme.surfaceContainerLowest.copy(alpha = DetailCardAlpha)
 
-/**
- * AVBox 经典毛玻璃质感修饰符
- */
 @Composable
-internal fun Modifier.detailGlass(shape: Shape): Modifier = this
-    .clip(shape)
-    .background(detailCardColor())
-    .background(
-        Brush.verticalGradient(
-            0f to Color.White.copy(alpha = DetailGlassGlossAlpha),
-            0.45f to Color.Transparent,
-        ),
-    )
-    .border(
-        width = 1.dp,
-        brush = Brush.verticalGradient(
-            listOf(
-                Color.White.copy(alpha = DetailGlassHighlightTopAlpha),
-                Color.White.copy(alpha = DetailGlassHighlightBottomAlpha),
-            ),
-        ),
-        shape = shape,
-    )
+internal fun detailSelectedCardColor(): Color =
+    MaterialTheme.colorScheme.primary.copy(alpha = DetailSelectedCardAlpha)
+
+@Composable
+internal fun detailSelectedCardBorder(): BorderStroke =
+    BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = DetailSelectedBorderAlpha))
 
 @Composable
 internal fun SectionTitleIcon(imageVector: ImageVector) {
@@ -105,89 +86,21 @@ internal fun DetailItemCard(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val shape = RoundedCornerShape(16.dp)
-    Column(
+    Surface(
+        shape = DetailCardShape,
+        color = if (selected) detailSelectedCardColor() else detailCardColor(),
+        border = if (selected) detailSelectedCardBorder() else null,
         modifier = modifier
             .height(DetailItemHeight)
             .defaultMinSize(minWidth = DetailItemMinWidth)
-            .detailGlass(shape)
-            .then(
-                if (selected) {
-                    Modifier.border(1.5.dp, MaterialTheme.colorScheme.primary, shape)
-                } else {
-                    Modifier
-                },
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-        content = content,
-    )
-}
-
-/**
- * 线路卡片（对齐 AVBox LineCard）
- */
-@Composable
-internal fun LineCard(
-    name: String,
-    count: Int,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
-    DetailItemCard(
-        selected = selected,
-        onClick = onClick,
-        modifier = Modifier.width(DetailItemWidth),
+            .clip(DetailCardShape)
+            .clickable(onClick = onClick),
     ) {
-        Text(
-            text = name,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Text(
-            text = "共 $count 集",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            modifier = Modifier.padding(top = 4.dp),
-        )
-    }
-}
-
-/**
- * 画质卡片（对齐 AVBox / DetailItemCard 风格）
- */
-@Composable
-internal fun QualityCard(
-    name: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    DetailItemCard(
-        selected = selected,
-        onClick = onClick,
-        modifier = modifier.width(DetailItemWidth),
-    ) {
-        Text(
-            text = name,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Text(
-            text = if (selected) "当前播放" else "点击切换",
-            style = MaterialTheme.typography.bodySmall,
-            color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            modifier = Modifier.padding(top = 4.dp),
+        Column(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
+            content = content,
         )
     }
 }
@@ -216,7 +129,7 @@ internal fun SourceSection(
                 .fillMaxWidth()
                 .padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
         ) {
-            SectionTitleIcon(Icons.Default.SwapHoriz)
+            SectionTitleIcon(Icons.Rounded.SwapHoriz)
             Text(
                 text = "换源",
                 style = MaterialTheme.typography.titleLarge,
@@ -296,7 +209,7 @@ internal fun TmdbCastSection(
                 .fillMaxWidth()
                 .padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
         ) {
-            SectionTitleIcon(Icons.Default.Group)
+            SectionTitleIcon(Icons.Rounded.Group)
             Text(
                 text = "演职员",
                 style = MaterialTheme.typography.titleLarge,
@@ -392,7 +305,7 @@ internal fun TmdbGenreSection(
                 .fillMaxWidth()
                 .padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
         ) {
-            SectionTitleIcon(Icons.Default.LocalOffer)
+            SectionTitleIcon(Icons.Rounded.Category)
             Text(
                 text = "类型",
                 style = MaterialTheme.typography.titleLarge,

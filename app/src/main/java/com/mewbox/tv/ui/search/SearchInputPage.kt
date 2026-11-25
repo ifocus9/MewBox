@@ -27,11 +27,11 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.DeleteOutline
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -117,7 +117,7 @@ fun SearchInputPage(
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
                 contentDescription = "返回",
                 tint = onSurface,
                 modifier = Modifier.size(22.dp),
@@ -139,7 +139,7 @@ fun SearchInputPage(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
-                imageVector = Icons.Default.Search,
+                imageVector = Icons.Rounded.Search,
                 contentDescription = null,
                 tint = onSurfaceVariant,
                 modifier = Modifier.size(18.dp),
@@ -184,7 +184,7 @@ fun SearchInputPage(
                     modifier = Modifier.size(24.dp),
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Clear,
+                        imageVector = Icons.Rounded.Close,
                         contentDescription = "清除",
                         tint = onSurfaceVariant,
                         modifier = Modifier.size(16.dp),
@@ -204,7 +204,7 @@ fun SearchInputPage(
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                imageVector = Icons.Default.Tune,
+                imageVector = Icons.Rounded.Tune,
                 contentDescription = "指定搜索站点",
                 tint = if (state.searchTargetSiteKey != null) primaryColor else onSurface,
                 modifier = Modifier.size(22.dp),
@@ -234,7 +234,7 @@ fun SearchInputPage(
                 )
                 IconButton(onClick = onClearHistory, modifier = Modifier.size(32.dp)) {
                     Icon(
-                        imageVector = Icons.Default.DeleteOutline,
+                        imageVector = Icons.Rounded.DeleteOutline,
                         contentDescription = "清空历史",
                         tint = onSurfaceVariant,
                         modifier = Modifier.size(20.dp),

@@ -5,13 +5,18 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
-import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -23,14 +28,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.text.SimpleDateFormat
@@ -39,6 +45,14 @@ import java.util.Locale
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import timber.log.Timber
+
+private val BatteryBodyShape = RoundedCornerShape(3.5.dp)
+private val BatteryTipShape = RoundedCornerShape(topEnd = 1.5.dp, bottomEnd = 1.5.dp)
+private val BatteryChargingColor = Color(0xFF34C759)
+private val BatteryLowColor = Color(0xFFFF453A)
+private val BatteryNormalFillColor = Color.White.copy(alpha = 0.92f)
+private val BatteryInvertTextColor = Color(0xFF0E1015)
 
 private data class BatterySnapshot(
     val percent: Int,
@@ -57,11 +71,7 @@ private fun readBatterySnapshot(intent: Intent?): BatterySnapshot {
 }
 
 /**
- * 播放器右上角电池与当前时间指示器
- * 对齐移动端播放器顶部栏规范（参考 MewPlayer BatteryTimeView）：
- * 上方为横向圆角电池电量条（20dp x 10dp），带电量内芯与正极凸起，充电为绿色，低电量为红色；
- * 下方为当前系统时间（8sp，紧凑居中对齐）。
- * 外层占 40dp 方格居中，与左侧控制图标严格垂直居中对齐。
+ * 播放器右上角单行横排系统状态指示器：系统时间 + 内嵌电量百分比的横向圆角电池图标
  */
 @Composable
 internal fun PlayerBatteryTimeIndicator(
@@ -75,7 +85,8 @@ internal fun PlayerBatteryTimeIndicator(
         try {
             val sticky = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
             readBatterySnapshot(sticky)
-        } catch (_: Throwable) {
+        } catch (t: Throwable) {
+            Timber.w(t, "读取初始电池电量失败")
             BatterySnapshot(percent = -1, isCharging = false)
         }
     }
@@ -114,88 +125,130 @@ internal fun PlayerBatteryTimeIndicator(
         }
         try {
             context.registerReceiver(receiver, filter)
-        } catch (_: Throwable) {}
+        } catch (t: Throwable) {
+            Timber.w(t, "注册播放器电量与时间广播失败")
+        }
 
         onDispose {
             try {
                 context.unregisterReceiver(receiver)
-            } catch (_: Throwable) {}
+            } catch (t: Throwable) {
+                Timber.w(t, "注销播放器电量与时间广播失败")
+            }
         }
     }
 
-    Box(
+    Row(
         modifier = modifier,
-        contentAlignment = Alignment.Center,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.End,
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-        ) {
-            // 横向小电池 (对标 FongMi 控制栏指示器: 22dp x 11dp)
-            Canvas(modifier = Modifier.size(width = 22.dp, height = 11.dp)) {
-                val densityValue = density
-                val w = size.width
-                val h = size.height
-                val sw = 1.3f * densityValue
-                val tipW = 1.5f * densityValue
-                val radius = 2.5f * densityValue
+        Text(
+            text = currentTime,
+            color = Color.White.copy(alpha = 0.92f),
+            style = TextStyle(
+                fontSize = 12.5.sp,
+                fontWeight = FontWeight.Medium,
+                fontFeatureSettings = "tnum",
+            ),
+            maxLines = 1,
+        )
 
-                // 外框
-                val bodyRight = w - tipW - densityValue * 0.5f
-                drawRoundRect(
-                    color = Color.White,
-                    topLeft = Offset(sw / 2f, sw / 2f),
-                    size = Size(
-                        (bodyRight - sw).coerceAtLeast(0f),
-                        (h - sw).coerceAtLeast(0f),
-                    ),
-                    cornerRadius = CornerRadius(radius, radius),
-                    style = Stroke(width = sw),
-                )
+        Spacer(modifier = Modifier.width(6.dp))
 
-                // 正极凸起
-                val tipH = h * 0.45f
-                drawRoundRect(
-                    color = Color.White,
-                    topLeft = Offset(bodyRight, (h - tipH) / 2f),
-                    size = Size(tipW, tipH),
-                    cornerRadius = CornerRadius(densityValue, densityValue),
-                )
-
-                // 电量内芯
-                val effectivePercent = if (batteryPercent >= 0) batteryPercent else 100
-                val inset = sw + 1f * densityValue
-                val left = inset
-                val right = bodyRight - inset
-                val fillWidth = (right - left) * effectivePercent.coerceIn(0, 100) / 100f
-                val fillColor = when {
-                    isCharging -> Color(0xFF4CD964)
-                    effectivePercent <= 20 -> Color(0xFFFF5252)
-                    else -> Color.White
-                }
-                if (fillWidth > 0f && h > inset * 2) {
-                    drawRoundRect(
-                        color = fillColor,
-                        topLeft = Offset(left, inset),
-                        size = Size(fillWidth, h - inset * 2),
-                        cornerRadius = CornerRadius(densityValue, densityValue),
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(2.dp))
-
-            // 当前时间 (对标 FongMi 控制栏时间: 10sp 居中清晰单行)
-            Text(
-                text = currentTime,
-                color = Color.White,
-                fontSize = 10.sp,
-                lineHeight = 11.sp,
-                textAlign = TextAlign.Center,
-                fontWeight = FontWeight.Normal,
-                maxLines = 1,
-            )
-        }
+        BatteryPillIcon(
+            batteryPercent = batteryPercent,
+            isCharging = isCharging,
+        )
     }
 }
 
+@Composable
+private fun BatteryPillIcon(
+    batteryPercent: Int,
+    isCharging: Boolean,
+) {
+    val effectivePercent = if (batteryPercent >= 0) batteryPercent.coerceIn(0, 100) else 100
+    val fillFraction = effectivePercent / 100f
+    val isColoredFill = isCharging || effectivePercent <= 20
+    val fillColor = when {
+        isCharging -> BatteryChargingColor
+        effectivePercent <= 20 -> BatteryLowColor
+        else -> BatteryNormalFillColor
+    }
+    val density = LocalDensity.current
+    val digitFontSize = with(density) { 8.5.dp.toSp() }
+    val digitStyle = TextStyle(
+        fontSize = digitFontSize,
+        lineHeight = digitFontSize,
+        fontWeight = FontWeight.Bold,
+        fontFeatureSettings = "tnum",
+        platformStyle = PlatformTextStyle(includeFontPadding = false),
+    )
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(width = 21.dp, height = 11.5.dp)
+                .clip(BatteryBodyShape)
+                .background(Color.White.copy(alpha = 0.32f)),
+        ) {
+            if (fillFraction > 0f) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .fillMaxWidth(fillFraction)
+                        .background(fillColor),
+                )
+            }
+
+            if (batteryPercent >= 0) {
+                val label = effectivePercent.toString()
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = label,
+                        color = Color.White,
+                        style = digitStyle,
+                        maxLines = 1,
+                    )
+                }
+
+                // 常规白填充态：对已填充区域裁切叠加深色反色数字，确保任意电量下均有高对比度
+                if (!isColoredFill && fillFraction > 0f) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .drawWithContent {
+                                clipRect(right = size.width * fillFraction) {
+                                    this@drawWithContent.drawContent()
+                                }
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = label,
+                            color = BatteryInvertTextColor,
+                            style = digitStyle,
+                            maxLines = 1,
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.width(0.5.dp))
+
+        Box(
+            modifier = Modifier
+                .width(1.5.dp)
+                .height(4.5.dp)
+                .clip(BatteryTipShape)
+                .background(Color.White.copy(alpha = 0.50f)),
+        )
+    }
+}

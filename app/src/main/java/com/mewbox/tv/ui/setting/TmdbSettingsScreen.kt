@@ -33,12 +33,12 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.ErrorOutline
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -299,7 +299,7 @@ private fun TmdbTopBar(
     ) {
         IconButton(onClick = onBack) {
             Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
                 contentDescription = "返回",
                 tint = TextPrimary,
             )
@@ -438,9 +438,9 @@ private fun TmdbInputField(
                 ) {
                     Icon(
                         imageVector = if (passwordVisible) {
-                            Icons.Default.VisibilityOff
+                            Icons.Rounded.VisibilityOff
                         } else {
-                            Icons.Default.Visibility
+                            Icons.Rounded.Visibility
                         },
                         contentDescription = if (passwordVisible) "隐藏 Key" else "显示 Key",
                         tint = TextSecondary,
@@ -455,7 +455,7 @@ private fun TmdbInputField(
                     modifier = Modifier.size(34.dp),
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Clear,
+                        imageVector = Icons.Rounded.Close,
                         contentDescription = "清除",
                         tint = TextSecondary,
                         modifier = Modifier.size(17.dp),
@@ -587,7 +587,7 @@ private fun TmdbTestBadge(status: TmdbTestStatus) {
             }
             is TmdbTestStatus.Success -> {
                 Icon(
-                    imageVector = Icons.Default.CheckCircle,
+                    imageVector = Icons.Rounded.CheckCircle,
                     contentDescription = null,
                     tint = fgColor,
                     modifier = Modifier.size(14.dp),
@@ -601,7 +601,7 @@ private fun TmdbTestBadge(status: TmdbTestStatus) {
             }
             is TmdbTestStatus.Error -> {
                 Icon(
-                    imageVector = Icons.Default.ErrorOutline,
+                    imageVector = Icons.Rounded.ErrorOutline,
                     contentDescription = null,
                     tint = fgColor,
                     modifier = Modifier.size(14.dp),

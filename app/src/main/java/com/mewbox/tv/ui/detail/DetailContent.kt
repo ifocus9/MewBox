@@ -1,30 +1,13 @@
 package com.mewbox.tv.ui.detail
 
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.AltRoute
-import androidx.compose.material.icons.filled.HighQuality
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -33,13 +16,14 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.mewbox.tv.api.tmdb.bean.TmdbDetail
+import com.mewbox.tv.api.tmdb.bean.TmdbEpisode
 import com.mewbox.tv.bean.Episode
 import com.mewbox.tv.bean.Flag
-import com.mewbox.tv.bean.PlayUrl
 import com.mewbox.tv.bean.Vod
+
+private val TypeSeparators = Regex("[,，、/|;；\\s]+")
 
 /**
  * 详情页主体滚动内容（完全对齐 AVBox DetailContent）
@@ -60,18 +44,17 @@ fun DetailContent(
     currentSiteKey: String,
     currentSourceName: String,
     resumeEpisodeText: String?,
-    playUrls: List<PlayUrl> = emptyList(),
-    selectedPlayUrl: PlayUrl? = null,
-    isResolvingPlay: Boolean = false,
     onPlay: () -> Unit,
     onToggleReverse: () -> Unit,
     onToggleCompact: () -> Unit,
     onSelectEpisode: (Episode) -> Unit,
     onSelectFlag: (Flag) -> Unit,
-    onSelectPlayUrl: (PlayUrl) -> Unit = {},
     onSelectSource: (Vod) -> Unit,
     quickBackdrop: String? = null,
     quickPoster: String? = null,
+    tmdbEpisodesBySeason: Map<Int, List<TmdbEpisode>> = emptyMap(),
+    isTmdbEpisodeCardEnabled: Boolean = true,
+    onToggleTmdbEpisodeCards: () -> Unit = {},
     onTitleLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -140,8 +123,8 @@ fun DetailContent(
                 )
             }
 
-            // 2. 剧集选集栏（正序/倒序、全部、横向集数卡片）
-            if (episodes.isNotEmpty()) {
+            // 2. 剧集选集栏（标题旁附带线路抽屉按钮，以及正序/倒序、全部、横向集数卡片）
+            if (episodes.isNotEmpty() || flags.isNotEmpty()) {
                 item(key = "episodes") {
                     EpisodeRow(
                         episodes = episodes,
@@ -151,132 +134,24 @@ fun DetailContent(
                         onToggleReverse = onToggleReverse,
                         onToggleCompact = onToggleCompact,
                         onEpisodeClick = onSelectEpisode,
+                        vodName = vod.vodName,
+                        vodPic = vod.vodPic,
+                        flags = flags,
+                        currentFlag = currentFlag,
+                        currentSourceName = currentSourceName,
+                        onSelectFlag = onSelectFlag,
+                        tmdbDetail = tmdbDetail,
+                        tmdbImageBase = tmdbImageBase,
+                        quickBackdrop = quickBackdrop,
+                        tmdbEpisodesBySeason = tmdbEpisodesBySeason,
+                        isTmdbEpisodeCardEnabled = isTmdbEpisodeCardEnabled,
+                        onToggleTmdbEpisodeCards = onToggleTmdbEpisodeCards,
                         modifier = itemPullModifier,
                     )
                 }
             }
 
-            // 3. 线路切换栏（线路名称、集数）
-            if (flags.isNotEmpty()) {
-                item(key = "flags") {
-                    Column(
-                        modifier = itemPullModifier
-                            .fillMaxWidth()
-                            .padding(top = 16.dp),
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
-                        ) {
-                            SectionTitleIcon(Icons.AutoMirrored.Filled.AltRoute)
-                            Text(
-                                text = "线路",
-                                style = MaterialTheme.typography.titleLarge,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.padding(start = 8.dp),
-                            )
-                            Spacer(Modifier.weight(1f))
-                            Text(
-                                text = currentSourceName,
-                                style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier
-                                    .padding(start = 12.dp)
-                                    .widthIn(max = 180.dp),
-                            )
-                        }
-                        LazyRow(
-                            contentPadding = PaddingValues(horizontal = 16.dp),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        ) {
-                            itemsIndexed(flags, key = { index, f -> "${index}_${f.flag}" }) { _, flag ->
-                                LineCard(
-                                    name = flag.flag,
-                                    count = flag.episodes.size,
-                                    selected = flag == currentFlag,
-                                    onClick = { onSelectFlag(flag) },
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            // 4. 画质切换栏（对齐 FongMi / AVBox）
-            val hasMeaningfulQualities = playUrls.size > 1 || (playUrls.size == 1 && playUrls.first().name != "默认")
-            if (hasMeaningfulQualities || (isResolvingPlay && playUrls.isEmpty())) {
-                item(key = "quality") {
-                    Column(
-                        modifier = itemPullModifier
-                            .fillMaxWidth()
-                            .padding(top = 16.dp),
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
-                        ) {
-                            SectionTitleIcon(Icons.Default.HighQuality)
-                            Text(
-                                text = "画质",
-                                style = MaterialTheme.typography.titleLarge,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.padding(start = 8.dp),
-                            )
-                            if (isResolvingPlay && playUrls.isEmpty()) {
-                                Spacer(Modifier.width(10.dp))
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(16.dp),
-                                    strokeWidth = 2.dp,
-                                    color = MaterialTheme.colorScheme.primary,
-                                )
-                                Spacer(Modifier.width(6.dp))
-                                Text(
-                                    text = "获取中...",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            } else {
-                                Spacer(Modifier.weight(1f))
-                                val currentQualityName = selectedPlayUrl?.name ?: playUrls.firstOrNull()?.name
-                                if (!currentQualityName.isNullOrBlank()) {
-                                    Text(
-                                        text = currentQualityName,
-                                        style = MaterialTheme.typography.labelLarge,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier
-                                            .padding(start = 12.dp)
-                                            .widthIn(max = 180.dp),
-                                    )
-                                }
-                            }
-                        }
-                        if (hasMeaningfulQualities) {
-                            LazyRow(
-                                contentPadding = PaddingValues(horizontal = 16.dp),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            ) {
-                                itemsIndexed(playUrls, key = { index, p -> "${index}_${p.name}_${p.url}" }) { _, playUrl ->
-                                    QualityCard(
-                                        name = playUrl.name,
-                                        selected = playUrl == selectedPlayUrl || playUrl.url == selectedPlayUrl?.url,
-                                        onClick = { onSelectPlayUrl(playUrl) },
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // 5. 换源栏（展示多站同名源或正在检索换源）
+            // 3. 换源栏（展示多站同名源或正在检索换源）
             if (changeSources.isNotEmpty() || isSearchingChangeSources) {
                 item(key = "sources") {
                     SourceSection(
@@ -289,7 +164,7 @@ fun DetailContent(
                 }
             }
 
-            // 6. TMDB 演职员
+            // 4. TMDB 演职员
             val cast = tmdbDetail?.credits?.cast.orEmpty()
             if (cast.isNotEmpty()) {
                 item(key = "tmdb_cast") {
@@ -301,8 +176,9 @@ fun DetailContent(
                 }
             }
 
-            // 7. TMDB 类型标签
-            val genres = tmdbDetail?.genres?.map { it.name }.orEmpty()
+            // 5. 类型标签（优先 TMDB genres，未匹配到时回退站源 typeName）
+            val genres = tmdbDetail?.genres?.map { it.name }?.filter { it.isNotBlank() }?.takeIf { it.isNotEmpty() }
+                ?: vod.typeName.split(TypeSeparators).filter { it.isNotBlank() }.distinct()
             if (genres.isNotEmpty()) {
                 item(key = "tmdb_genres") {
                     TmdbGenreSection(

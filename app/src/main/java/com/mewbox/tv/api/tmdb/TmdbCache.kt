@@ -3,6 +3,7 @@ package com.mewbox.tv.api.tmdb
 import android.content.Context
 import androidx.collection.LruCache
 import com.mewbox.tv.api.tmdb.bean.TmdbDetail
+import com.mewbox.tv.api.tmdb.bean.TmdbSeasonDetail
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.serialization.json.Json
 import java.util.concurrent.TimeUnit
@@ -37,6 +38,7 @@ class TmdbCache @Inject constructor(
     }
 
     private val detailCache = LruCache<String, TmdbDetail>(50)
+    private val seasonCache = LruCache<String, TmdbSeasonDetail>(80)
     private val prefs by lazy { context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE) }
     private val manualPrefs by lazy { context.getSharedPreferences(PREF_MANUAL_NAME, Context.MODE_PRIVATE) }
 
@@ -48,9 +50,19 @@ class TmdbCache @Inject constructor(
         return detailCache.get("${mediaType}_$tmdbId")
     }
 
+    fun putSeason(tvId: Int, seasonNumber: Int, season: TmdbSeasonDetail) {
+        seasonCache.put("${tvId}_s$seasonNumber", season)
+    }
+
+    fun getSeason(tvId: Int, seasonNumber: Int): TmdbSeasonDetail? {
+        return seasonCache.get("${tvId}_s$seasonNumber")
+    }
+
     fun putDetailByTitle(cleanedTitle: String, detail: TmdbDetail) {
         detailCache.put("title_$cleanedTitle", detail)
     }
+
+    fun hasManualOverride(cleanedTitle: String): Boolean = manualPrefs.contains(cleanedTitle)
 
     /**
      * 保存用户手动修正的 TMDB 匹配结果（同时写入内存与磁盘持久化）
@@ -104,12 +116,14 @@ class TmdbCache @Inject constructor(
 
     fun clearAll() {
         detailCache.evictAll()
+        seasonCache.evictAll()
         prefs.edit().clear().apply()
         manualPrefs.edit().clear().apply()
     }
 
     fun clearMemory() {
         detailCache.evictAll()
+        seasonCache.evictAll()
     }
 
     private fun negKey(cleanedTitle: String): String = "$KEY_NEG_PREFIX${cleanedTitle.hashCode()}"
