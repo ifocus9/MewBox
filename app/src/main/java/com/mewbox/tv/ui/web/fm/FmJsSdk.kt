@@ -153,6 +153,28 @@ object FmJsSdk {
                     return Object.assign({}, urlOrOptions || {});
                 }
 
+                function decodeBase64ToArrayBuffer(b64) {
+                    var bin = atob(String(b64 || ''));
+                    var len = bin.length;
+                    var bytes = new Uint8Array(len);
+                    for (var i = 0; i < len; i++) {
+                        bytes[i] = bin.charCodeAt(i);
+                    }
+                    return bytes.buffer;
+                }
+
+                function executeNetRequest(opts) {
+                    var wantArrayBuffer = String((opts && opts.responseType) || '').toLowerCase() === 'arraybuffer';
+                    return invoke('net.request', opts).then(function(res) {
+                        if (wantArrayBuffer && res && res.base64 && typeof res.body === 'string') {
+                            var buf = decodeBase64ToArrayBuffer(res.body);
+                            res.data = buf;
+                            res.body = buf;
+                        }
+                        return res;
+                    });
+                }
+
                 var fongmi = {
                     __initialized: true,
                     version: '1.0.0',
@@ -214,7 +236,7 @@ object FmJsSdk {
 
                     net: {
                         request: function(urlOrOptions, options) {
-                            return invoke('net.request', normalizeUrlParams(urlOrOptions, options));
+                            return executeNetRequest(normalizeUrlParams(urlOrOptions, options));
                         },
                         get: function(url, headersOrOptions) {
                             var opts = {};
@@ -227,7 +249,7 @@ object FmJsSdk {
                             }
                             opts.url = url;
                             opts.method = 'GET';
-                            return invoke('net.request', opts);
+                            return executeNetRequest(opts);
                         },
                         post: function(url, body, headersOrOptions) {
                             var opts = {};
@@ -241,7 +263,7 @@ object FmJsSdk {
                             opts.url = url;
                             opts.method = 'POST';
                             opts.body = body;
-                            return invoke('net.request', opts);
+                            return executeNetRequest(opts);
                         },
                         cookieGet: function(url) {
                             var params = typeof url === 'object' && url !== null ? url : { url: String(url || location.href) };
@@ -512,7 +534,10 @@ object FmJsSdk {
                             return invoke('ui.getChrome', {});
                         },
                         getViewport: function() {
-                            return invoke('ui.getViewport', {});
+                            return fongmi.getViewport();
+                        },
+                        onBack: function(fn) {
+                            return fongmi.navigation.setBackHandler(fn);
                         }
                     },
 
@@ -570,6 +595,7 @@ object FmJsSdk {
                     history: fongmi.app.history,
                     stop: fongmi.player.stop,
                     toast: fongmi.app.toast,
+                    open: fongmi.app.openWebView,
                     openBrowser: fongmi.app.openBrowser,
                     openWebView: fongmi.app.openWebView,
                     pan: fongmi.pan,

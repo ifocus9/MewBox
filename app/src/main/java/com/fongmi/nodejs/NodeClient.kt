@@ -63,8 +63,6 @@ class NodeClient(
     @Volatile private var loadCancellation: AtomicBoolean? = null
     @Volatile private var session: Long = 0
     @Volatile private var bundle: NodeBundle? = null
-    @Volatile private var currentPlayFlag: String = ""
-    @Volatile private var currentPlayId: String = ""
 
     companion object {
         private const val SUCCESS_RESPONSE = "{\"success\":true,\"code\":0}"
@@ -396,8 +394,6 @@ class NodeClient(
         processManager.stopService()
         bundle = null
         loadCancellation = null
-        currentPlayFlag = ""
-        currentPlayId = ""
         processManager.resetState()
     }
 
@@ -455,9 +451,7 @@ class NodeClient(
                 processManager.onError(optObj)
                 SUCCESS_RESPONSE
             }
-            "queryProfile" -> readProfile().toString()
             "saveProfile" -> saveProfile(optObj)
-            "getPlayInfo" -> getPlayInfo()
             else -> null
         }
     }
@@ -466,18 +460,6 @@ class NodeClient(
         val current = bundle ?: return null
         val parent = current.data.parentFile ?: current.root.parentFile
         return File(parent, "profile.json")
-    }
-
-    private fun readProfile(): JsonElement {
-        synchronized(profileLock) {
-            val file = getProfileFile()
-            if (file == null || !file.isFile) return JsonObject(emptyMap())
-            return try {
-                Json.parseToJsonElement(Path.read(file))
-            } catch (_: Exception) {
-                JsonObject(emptyMap())
-            }
-        }
     }
 
     private fun saveProfile(profile: JsonObject): String {
@@ -491,25 +473,6 @@ class NodeClient(
                 FAILURE_RESPONSE
             }
         }
-    }
-
-    fun setPlayInfo(flag: String?, id: String?) {
-        currentPlayFlag = flag.orEmpty()
-        currentPlayId = id.orEmpty()
-    }
-
-    private fun getPlayInfo(): String {
-        return buildJsonObject {
-            put("title", "")
-            put("episodeName", "")
-            put("fileName", "")
-            put("flag", currentPlayFlag)
-            put("id", currentPlayId)
-            put("url", "")
-            put("key", "")
-            put("position", 0)
-            put("duration", 0)
-        }.toString()
     }
 
     @Throws(Exception::class)

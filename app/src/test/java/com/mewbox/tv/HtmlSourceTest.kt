@@ -155,6 +155,10 @@ class HtmlSourceTest {
         assertTrue(script.contains("fongmiready"))
         assertTrue(script.contains("fmready"))
         assertTrue(script.contains("--fm-safe-top"))
+        assertTrue(script.contains("open: fongmi.app.openWebView"))
+        assertTrue(script.contains("decodeBase64ToArrayBuffer"))
+        assertTrue(script.contains("onBack: function(fn)"))
+        assertTrue(script.contains("return fongmi.getViewport()"))
     }
 
     @Test

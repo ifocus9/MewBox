@@ -148,7 +148,6 @@ class NodeSpider(
     }
 
     override suspend fun playerContent(flag: String, id: String, vipFlags: List<String>): Result = runNodeIo {
-        client.setPlayInfo(flag, id)
         val body = buildJsonObject {
             put("flag", flag)
             put("id", id)

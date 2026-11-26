@@ -3,12 +3,10 @@ package com.mewbox.tv.api.net
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
-import android.webkit.WebSettings
 import com.mewbox.tv.util.AppToast
 import com.mewbox.tv.api.parser.ResultParser
 import com.mewbox.tv.bean.WebOptions
 import com.mewbox.tv.ui.web.WebActivity
-import com.mewbox.tv.ui.web.WebViewCookies
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -39,8 +37,8 @@ import javax.inject.Singleton
  * 核心功能：
  * 1. 监听 127.0.0.1 本地回环端口（默认 9977，被占用时自动切换可用端口）。
  * 2. 接收来自 Node.js / CatVod 爬虫脚本发送的 POST /msg 消息请求。
- * 3. 完美支持 openInternalWebview / openWeb 动作，调起内部 Webview 打开指定 URL（如扫码登录、扩展后台等）。
- * 4. 支持 getCookie / setCookie / getUserAgent / toast 等常用宿主能力反向注入。
+ * 3. 支持 openInternalWebview 动作，调起内部 Webview 打开指定 URL（如扫码登录、扩展后台等）。
+ * 4. 支持 toast 提示等宿主能力反向注入。
  */
 @Singleton
 class LocalMessageBridge @Inject constructor(
@@ -249,7 +247,7 @@ class LocalMessageBridge @Inject constructor(
         }
 
         return when (action) {
-            "openInternalWebview", "openWeb" -> {
+            "openInternalWebview" -> {
                 handleOpenInternalWebview(opt)
                 SUCCESS_JSON
             }
@@ -260,27 +258,6 @@ class LocalMessageBridge @Inject constructor(
                     AppToast.show(message)
                 }
                 SUCCESS_JSON
-            }
-            "getCookie" -> {
-                val optObj = opt as? JsonObject
-                val url = (optObj?.get("url") as? JsonPrimitive)?.content.orEmpty()
-                val cookie = WebViewCookies.get(url)
-                """{"success":true,"code":0,"cookie":"$cookie"}"""
-            }
-            "setCookie" -> {
-                val optObj = opt as? JsonObject
-                val url = (optObj?.get("url") as? JsonPrimitive)?.content.orEmpty()
-                val cookie = (optObj?.get("cookie") as? JsonPrimitive)?.content.orEmpty()
-                val success = WebViewCookies.set(url, cookie)
-                if (success) SUCCESS_JSON else FAILURE_JSON
-            }
-            "getUserAgent" -> {
-                val ua = try {
-                    WebSettings.getDefaultUserAgent(context)
-                } catch (_: Exception) {
-                    ""
-                }
-                """{"success":true,"code":0,"ua":"$ua"}"""
             }
             else -> {
                 Timber.w("未知的桥接消息动作: $action")

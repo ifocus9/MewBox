@@ -125,7 +125,7 @@ class WebCall @Inject constructor(
                 put("url", response.request.url.toString())
                 put("headers", headersJson)
 
-                if (responseType == "base64") {
+                if (responseType == "base64" || responseType == "arraybuffer") {
                     val b64 = Base64.encodeToString(decodedBytes, Base64.NO_WRAP)
                     put("body", b64)
                     put("data", b64)

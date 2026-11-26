@@ -51,7 +51,7 @@ class LocalMessageBridgeTest {
 
         bridge.addHandler(object : LocalMessageBridge.MessageHandler {
             override fun onMessage(action: String, opt: JsonElement?): String? {
-                if (action == "openInternalWebview" || action == "openWeb") {
+                if (action == "openInternalWebview") {
                     capturedAction.set(action)
                     val url = ((opt as? JsonObject)?.get("url") as? JsonPrimitive)?.content
                     capturedUrl.set(url)
